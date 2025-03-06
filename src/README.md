@@ -7,3 +7,11 @@
 ❯ pip install tensorflow-macos tensorflow-metal   
 ❯ pip install opencv-python mediapipe numpy  
 
+---
+
+### 실행 방법
+- 3D pose  
+❯ python main_3d.py
+
+- 2D pose  
+❯ python main.py

@@ -122,5 +122,5 @@ class PoseTrackingSystem:
 
 # 실행
 if __name__ == "__main__":
-    pose_tracking = PoseTrackingSystem(roi_ratio=0.8)
+    pose_tracking = PoseTrackingSystem(roi_ratio=0.9)
     pose_tracking.run()

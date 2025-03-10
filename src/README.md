@@ -6,7 +6,7 @@
 ❯ pip install torch torchvision torchaudio  
 ❯ pip install tensorflow-macos tensorflow-metal   
 ❯ pip install opencv-python mediapipe numpy  
-
+❯ pip install pandas  
 ---
 
 ### 실행 방법

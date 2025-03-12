@@ -72,6 +72,15 @@ class PoseTrackingSystem3D:
                                 (int(curr_com[0]), int(curr_com[1])),
                                 z_color, 2)
 
+                    # 3D 이동 방향 계산 및 시각화
+                    if len(self.com_trajectory) >= 5:
+                        direction, speed = self.com_calculator.calculate_movement_direction(
+                            self.com_trajectory, window_size=5)
+
+                        # 방향 시각화
+                        processed_frame = self.skeleton_visualizer.draw_direction_arrow(
+                            processed_frame, com_3d, direction, speed)
+
                 # 3D 스켈레톤 시각화
                 processed_frame = self.skeleton_visualizer.draw_3d_skeleton(
                     processed_frame, keypoints_3d, filtered_keypoints_3d)
@@ -124,5 +133,5 @@ class PoseTrackingSystem3D:
 
 # 실행
 if __name__ == "__main__":
-    pose_tracking = PoseTrackingSystem3D(roi_ratio=0.9)
+    pose_tracking = PoseTrackingSystem3D(roi_ratio=0.95)
     pose_tracking.run()

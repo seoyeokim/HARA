@@ -69,6 +69,15 @@ class PoseTrackingSystem:
                                 (int(curr_com[0]), int(curr_com[1])),
                                 color, 2)
 
+                    # 이동 방향 계산
+                    if len(self.com_trajectory) >= 5:
+                        direction, speed = self.com_calculator.calculate_movement_direction(
+                            self.com_trajectory, window_size=5)
+
+                        # 방향 시각화
+                        processed_frame = self.skeleton_visualizer.draw_direction_arrow(
+                            processed_frame, com, direction, speed)
+
                 # 스켈레톤 시각화
                 processed_frame = self.skeleton_visualizer.draw_2d_skeleton(
                     processed_frame, landmarks, filtered_keypoints)
@@ -122,5 +131,5 @@ class PoseTrackingSystem:
 
 # 실행
 if __name__ == "__main__":
-    pose_tracking = PoseTrackingSystem(roi_ratio=0.9)
+    pose_tracking = PoseTrackingSystem(roi_ratio=0.95)
     pose_tracking.run()

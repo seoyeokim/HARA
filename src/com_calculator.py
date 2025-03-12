@@ -6,15 +6,16 @@ class COMCalculator:
         # BSP(Body Segment Parameter) 정의
         # Winter의 연구 기반 분절 질량 비율 (총 질량 대비 각 분절의 비율)
         self.segment_mass_ratios = {
-            'head': 0.081,           # 머리
-            'trunk': 0.497,          # 몸통 (가슴, 복부, 골반 포함)
-            'upper_arm': 0.028,      # 상완 (양쪽 평균)
-            'forearm': 0.016,        # 전완 (양쪽 평균)
-            'hand': 0.006,           # 손 (양쪽 평균)
-            'thigh': 0.1,            # 대퇴 (양쪽 평균)
-            'shank': 0.047,          # 하퇴 (양쪽 평균)
-            'foot': 0.014            # 발 (양쪽 평균)
+            'head': 0.0694,        # 머리
+            'trunk': 0.4346,       # 몸통 (가슴, 복부, 골반 포함)
+            'upper_arm': 0.0271,   # 상완 (양쪽 평균)
+            'forearm': 0.0162,     # 전완 (양쪽 평균)
+            'hand': 0.0061,        # 손 (양쪽 평균)
+            'thigh': 0.1416,       # 대퇴 (양쪽 평균)
+            'shank': 0.0433,       # 하퇴 (양쪽 평균)
+            'foot': 0.0137         # 발 (양쪽 평균)
         }
+
 
         # MediaPipe 키포인트 인덱스와 신체 분절 매핑
         self.segment_keypoints = {
@@ -155,3 +156,39 @@ class COMCalculator:
                 return (total_x, total_y)
         else:
             return None
+
+    def calculate_movement_direction(self, com_history, window_size=5):
+        """
+        CoM 궤적에서 이동 방향 계산 (3D 지원)
+        Args:
+        com_history (list): CoM 좌표 리스트 [(x,y,z), ...] 또는 [(x,y), ...]
+        window_size (int): 방향 계산에 사용할 최근 프레임 수
+        Returns:
+        tuple: 방향 벡터 (dx, dy, dz) 또는 (dx, dy), 속력
+        """
+        if len(com_history) < window_size:
+            # 데이터가 부족하면 3D 또는 2D에 따라 다른 기본값 반환
+            is_3d = len(com_history[0]) == 3 if com_history else True
+            return (0, 0, 0), 0 if is_3d else (0, 0), 0
+
+        # 최근 프레임 사용
+        recent_positions = com_history[-window_size:]
+
+        # 시작점과 끝점
+        start_pos = np.array(recent_positions[0])
+        end_pos = np.array(recent_positions[-1])
+
+        # 방향 벡터 계산
+        direction_vector = end_pos - start_pos
+
+        # 벡터 길이 (속력)
+        speed = np.linalg.norm(direction_vector)
+
+        # 벡터 정규화 (길이가 0이 아닌 경우)
+        if speed > 0.1:  # 작은 임계값으로 노이즈 필터링
+            normalized_direction = direction_vector / speed
+        else:
+            normalized_direction = np.zeros_like(direction_vector)
+            speed = 0
+
+        return tuple(normalized_direction), speed

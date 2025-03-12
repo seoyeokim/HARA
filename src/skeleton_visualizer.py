@@ -154,3 +154,80 @@ class SkeletonVisualizer:
             (0, 9), (9, 11), (9, 12)
         ]
         return connections
+
+    def draw_direction_arrow(self, frame, com, direction, speed, scale=100):
+        """
+        이동 방향 화살표 그리기
+        Args:
+            frame: 시각화할 프레임
+            com: CoM 위치 (x, y) 또는 (x, y, z)
+            direction: 방향 벡터 (dx, dy) 또는 (dx, dy, dz)
+            speed: 이동 속도
+            scale: 화살표 크기 비율
+        Returns:
+            방향 표시가 추가된 프레임
+        """
+        if com is None or direction is None:
+            return frame
+
+        # 방향 벡터의 시작점 (CoM 위치)
+        start_point = (int(com[0]), int(com[1]))
+
+        arrow_length = min(int(speed * 1.0) + 20, scale)  # 기본 크기와 속도 계수 증가
+
+        # 방향 벡터의 끝점
+        end_point = (
+            int(start_point[0] + direction[0] * arrow_length),
+            int(start_point[1] + direction[1] * arrow_length)
+        )
+
+        # 화살표 색상 (속도에 따라 변경)
+        color = (0, int(min(speed * 5, 255)), 255)  # 속도에 따라 빨간색 -> 노란색
+
+        # 화살표 두께 증가
+        thickness = 5  # 화살표 선 두께 증가
+
+        # 화살표 그리기 - 팁 크기도 증가
+        cv2.arrowedLine(frame, start_point, end_point, color, thickness, tipLength=0.4)
+
+        # 속도 텍스트 위치 조정 - CoM z 좌표와 겹치지 않도록
+        cv2.putText(frame, f"{speed:.1f} px/s",
+                    (start_point[0] + 15, start_point[1] - 25),  # 위치 수정: 더 위쪽으로 이동
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+        return frame
+
+    def draw_3d_direction(self, frame, com, direction, speed, scale=100):  # scale 값 증가
+        """
+        3D 이동 방향 시각화
+        Args:
+            frame: 시각화할 프레임
+            com: CoM 위치 (x, y, z)
+            direction: 방향 벡터 (dx, dy, dz)
+            speed: 이동 속도
+            scale: 화살표 크기 비율
+        Returns:
+            방향 표시가 추가된 프레임
+        """
+        # 2D 화살표 그리기 (기본)
+        frame = self.draw_direction_arrow(frame, com, direction[:2], speed, scale)
+
+        # Z축 방향 표시 (색상 또는 크기로)
+        z_direction = direction[2]
+
+        # Z축 방향에 따른 시각화 (예: 원의 색상으로 표현)
+        # z_direction > 0.5: (0, 0, 255) = 빨간색 - 카메라에서 멀어지는 움직임
+        # z_direction < -0.5: (255, 0, 0) = 파란색 - 카메라로 다가오는 움직임
+        z_color = (0, 0, 255) if z_direction > 0.8 else (255, 0, 0) if z_direction < -0.8 else (255, 255, 255)
+
+        # Z 방향 표시 원
+        cv2.circle(frame, (int(com[0]), int(com[1])), 10, z_color, -1)  # 원 크기 증가
+
+        # # Z 방향 텍스트
+        # if abs(z_direction) > 0.8:
+        #     z_text = "FWD" if z_direction > 0 else "BWD"
+        #     cv2.putText(frame, z_text,
+        #                 (int(com[0]) - 15, int(com[1]) + 30),  # 위치 조정
+        #                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+        return frame

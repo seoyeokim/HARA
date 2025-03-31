@@ -154,10 +154,10 @@ class SkeletonVisualizer:
             (0, 9), (9, 11), (9, 12)
         ]
         return connections
-
+    
     def draw_direction_arrow(self, frame, com, direction, speed, scale=100):
         """
-        이동 방향 화살표 그리기
+        이동 방향 화살표 그리기 (카메라 움직임에 덜 민감하게 수정)
         Args:
             frame: 시각화할 프레임
             com: CoM 위치 (x, y) 또는 (x, y, z)
@@ -173,7 +173,31 @@ class SkeletonVisualizer:
         # 방향 벡터의 시작점 (CoM 위치)
         start_point = (int(com[0]), int(com[1]))
 
-        arrow_length = min(int(speed * 1.0) + 20, scale)  # 기본 크기와 속도 계수 증가
+        # 속도 임계값 설정 - 일정 속도 이하는 무시
+        speed_threshold = 2.5  # 속도 임계값 (px/s)
+
+        # 속도가 임계값보다 작으면 매우 작은 화살표만 표시하거나 표시하지 않음
+        if speed < speed_threshold:
+            # 속도가 임계값 이하일 때는 회색으로 표시하고 화살표 길이 최소화
+            color = (150, 150, 150)  # 회색
+            arrow_length = 15  # 최소 화살표 길이
+
+            # 텍스트에 '속도 표시' 추가 (한글 대신 숫자 표시)
+            cv2.putText(frame, f"{speed:.1f} px/s",
+                        (start_point[0] + 15, start_point[1] - 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        else:
+            # 속도가 임계값보다 크면 정상 화살표 표시
+            # 속도에 비선형 매핑 적용 - 작은 움직임에 덜 민감하게
+            arrow_length = min(int(20 + (speed - speed_threshold) * 0.7), scale)
+
+            # 화살표 색상 (속도에 따라 변경)
+            color = (0, int(min((speed - speed_threshold) * 10, 255)), 255)
+
+            # 속도 텍스트 표시
+            cv2.putText(frame, f"{speed:.1f} px/s",
+                        (start_point[0] + 15, start_point[1] - 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
         # 방향 벡터의 끝점
         end_point = (
@@ -181,19 +205,12 @@ class SkeletonVisualizer:
             int(start_point[1] + direction[1] * arrow_length)
         )
 
-        # 화살표 색상 (속도에 따라 변경)
-        color = (0, int(min(speed * 5, 255)), 255)  # 속도에 따라 빨간색 -> 노란색
+        # 화살표 두께 - 속도에 따라 조정
+        thickness = 3 if speed < speed_threshold else 5
 
-        # 화살표 두께 증가
-        thickness = 5  # 화살표 선 두께 증가
-
-        # 화살표 그리기 - 팁 크기도 증가
-        cv2.arrowedLine(frame, start_point, end_point, color, thickness, tipLength=0.4)
-
-        # 속도 텍스트 위치 조정 - CoM z 좌표와 겹치지 않도록
-        cv2.putText(frame, f"{speed:.1f} px/s",
-                    (start_point[0] + 15, start_point[1] - 25),  # 위치 수정: 더 위쪽으로 이동
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        # 화살표 그리기
+        cv2.arrowedLine(frame, start_point, end_point, color, thickness,
+                       tipLength=0.3 if speed < speed_threshold else 0.4)
 
         return frame
 

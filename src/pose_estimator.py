@@ -3,13 +3,13 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-class PoseEstimator:
+class PoseEstimator3D:
     def __init__(self,
                  min_detection_confidence=0.5,
                  min_tracking_confidence=0.5,
                  roi_padding=40):
         """
-        MediaPipe 포즈 추정기 초기화 (동적 ROI 지원)
+        MediaPipe 3D 포즈 추정기 초기화 (동적 ROI 지원)
         Args:
             min_detection_confidence (float): 최소 감지 신뢰도
             min_tracking_confidence (float): 최소 추적 신뢰도
@@ -28,6 +28,15 @@ class PoseEstimator:
         self.roi_bbox = None  # 현재 ROI 영역 [x_min, y_min, x_max, y_max]
         self.roi_active = False # 현재 ROI를 사용 중인지 여부
         self.roi_padding = roi_padding # 픽셀 단위 패딩
+
+        # Z값 안정화를 위한 변수 추가
+        self.z_history = {}  # 키포인트별 Z값 이력 저장
+        self.z_history_max_length = 10  # 이력 길이 (프레임 수)
+        self.z_baseline = None  # 기준 Z값 (초기화 후 설정)
+        self.z_scale_factor = 0.5  # Z값 스케일 감소 (변화 줄이기)
+        self.initialization_frames = 30  # 초기화에 사용할 프레임 수
+        self.frame_count = 0  # 프레임 카운터
+        self.initial_z_values = []  # 초기 Z값 저장용
 
     def _calculate_roi(self, landmarks, frame):
         """
@@ -199,24 +208,6 @@ class PoseEstimator:
         self.pose.close()
         print("MediaPipe Pose resources released.")
 
-        
-
-class PoseEstimator3D(PoseEstimator):
-    def __init__(self,
-                 min_detection_confidence=0.5,
-                 min_tracking_confidence=0.5,
-                 roi_padding=40):
-        """MediaPipe 3D 포즈 추정기 초기화"""
-        super().__init__(min_detection_confidence, min_tracking_confidence, roi_padding)
-
-        # Z값 안정화를 위한 변수 추가
-        self.z_history = {}  # 키포인트별 Z값 이력 저장
-        self.z_history_max_length = 10  # 이력 길이 (프레임 수)
-        self.z_baseline = None  # 기준 Z값 (초기화 후 설정)
-        self.z_scale_factor = 0.5  # Z값 스케일 감소 (변화 줄이기)
-        self.initialization_frames = 30  # 초기화에 사용할 프레임 수
-        self.frame_count = 0  # 프레임 카운터
-        self.initial_z_values = []  # 초기 Z값 저장용
 
     def extract_3d_keypoints(self, landmarks, frame):
         """

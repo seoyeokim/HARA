@@ -159,23 +159,23 @@ class COMCalculator:
 
     def calculate_movement_direction(self, com_history, window_size=5):
         """
-        CoM 궤적에서 이동 방향 계산 (3D 지원) - 카메라 흔들림에 덜 민감하게 수정
+        CoM 궤적에서 이동 방향 계산 (3D 지원)
         Args:
         com_history (list): CoM 좌표 리스트 [(x,y,z), ...] 또는 [(x,y), ...]
         window_size (int): 방향 계산에 사용할 최근 프레임 수
         Returns:
-        tuple: 방향 벡터 (dx, dy, dz) 또는 (dx, dy), 속력
+        tuple: (direction_vector, speed) - direction_vector는 (dx, dy) 또는 (dx, dy, dz)
         """
         if len(com_history) < window_size:
             # 데이터가 부족하면 3D 또는 2D에 따라 다른 기본값 반환
             is_3d = len(com_history[0]) == 3 if com_history else True
-            return (0, 0, 0), 0 if is_3d else (0, 0), 0
+            return ((0, 0, 0) if is_3d else (0, 0)), 0
 
-        # 최근 프레임 사용
+        # 최근 프레임 사용 - 윈도우 크기 증가
+        window_size = min(window_size, len(com_history))
         recent_positions = com_history[-window_size:]
 
         # 더 안정적인 방향 계산을 위해 이동 평균 적용
-        # 단순히 처음과 끝을 비교하는 대신 여러 프레임의 차이 평균 사용
         direction_vectors = []
         speeds = []
 
@@ -189,7 +189,7 @@ class COMCalculator:
             frame_speed = np.linalg.norm(vector)
 
             # 노이즈 필터링 - 매우 작은 변화는 무시
-            if frame_speed > 0.5:  # 최소 변화 임계값 증가
+            if frame_speed > 1.0:  # 최소 변화 임계값 증가 (0.5에서 1.0으로)
                 direction_vectors.append(vector)
                 speeds.append(frame_speed)
 
@@ -202,21 +202,21 @@ class COMCalculator:
             main_speed = np.linalg.norm(main_vector) / window_size  # 평균 속도로 변환
 
             # 프레임 간 변화의 평균 방향과 궤적의 주 방향을 결합
-            # 주 방향에 더 높은 가중치 부여 (0.7)
-            if main_speed > 0.5:  # 최소 주 속도 임계값
+            # 주 방향에 더 높은 가중치 부여 (0.8로 증가)
+            if main_speed > 1.0:  # 최소 주 속도 임계값 증가
                 avg_vector = np.mean(direction_vectors, axis=0) if direction_vectors else main_vector
-                combined_vector = 0.7 * main_vector + 0.3 * avg_vector
+                combined_vector = 0.8 * main_vector + 0.2 * avg_vector  # 주 방향에 가중치 증가
 
                 # 평균 속도 계산 (프레임 간 속도와 주 방향 속도의 가중 평균)
                 avg_frame_speed = np.mean(speeds) if speeds else 0
-                speed = 0.7 * main_speed + 0.3 * avg_frame_speed
+                speed = 0.8 * main_speed + 0.2 * avg_frame_speed  # 주 방향 속도에 가중치 증가
 
                 # 방향 벡터 정규화
                 combined_speed = np.linalg.norm(combined_vector)
-                if combined_speed > 0.1:
+                if combined_speed > 0.5:  # 임계값 증가
                     normalized_direction = combined_vector / combined_speed
                     return tuple(normalized_direction), speed
 
         # 유효한 방향을 계산할 수 없는 경우 기본값 반환
         is_3d = len(com_history[0]) == 3 if com_history else True
-        return (0, 0, 0), 0 if is_3d else (0, 0), 0
+        return ((0, 0, 0) if is_3d else (0, 0)), 0

@@ -38,6 +38,15 @@ class PoseTrackingSystem3D:
         self.max_allowed_move = 30.0  # 한 프레임당 최대 허용 이동 거리
         self.smoothing_alpha = 0.7    # 지수 이동 평균 알파 값
 
+        # Z값과 Z방향 구분 시각화를 위한 설정
+        self.z_color_scale = 5.0  # Z값 색상 변화 스케일 계수
+        self.z_direction_threshold = 0.3  # 의미 있는 Z방향 움직임 임계값
+
+        # Z축 방향 표시
+        self.z_direction_history = {"direction": None, "strength": 0, "duration": 0}
+        self.z_direction_min_duration = 30  # 최소 표시 지속 프레임 수 (약 1초로 수정)
+        self.z_direction_max_duration = 60  # 최대 표시 지속 프레임 수 (약 2초로 수정)
+
     def _calculate_com(self, filtered_keypoints_3d):
         """
         무게중심 계산 및 안정화
@@ -64,7 +73,7 @@ class PoseTrackingSystem3D:
             # 속도에 따른 적응형 알파값 (더 빠른 움직임에는 더 높은 알파값)
             adaptive_alpha = min(0.9, self.smoothing_alpha + (distance / 100.0))
 
-            # 급격한 변화 필터링 (거리가 큰 경우 부드럽게 보간, 값 증가로 반응성 향상)
+            # 급격한 변화 필터링 (거리가 큰 경우 부드럽게 보간)
             if distance > self.max_allowed_move:
                 # 최대 거리로 제한된 새 위치 계산
                 direction = (current_com - prev_com) / distance
@@ -86,18 +95,35 @@ class PoseTrackingSystem3D:
 
     def _visualize_com(self, frame, com_3d):
         """
-        CoM 시각화 (원과 텍스트)
+        CoM 시각화 - Z값(절대적 깊이)을 색상으로 표현
         Args:
             frame: 처리할 프레임
             com_3d: CoM 위치 (x, y, z)
         Returns:
             numpy.ndarray: CoM이 시각화된 프레임
         """
-        # 현재 CoM 표시
-        cv2.circle(frame, (int(com_3d[0]), int(com_3d[1])), 8, (0, 255, 255), -1)
-        cv2.putText(frame, f"CoM z:{int(com_3d[2])}",
-                    (int(com_3d[0]) + 10, int(com_3d[1]) - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        # Z값에 따른 색상 매핑
+        z_value = com_3d[2]
+
+        # Z값 범위를 색상으로 변환 (그라데이션)
+        # 기준점(z=0)에서는 녹색, 양수(멀어짐)는 녹색→노란색, 음수(가까워짐)는 녹색→청록색
+        if z_value > 0:  # 기준보다 멀리 있음
+            # 녹색에서 노란색으로 그라데이션 (0,255,0) -> (0,255,255) [BGR 순서]
+            intensity = min(255, int(abs(z_value) * 10))
+            depth_color = (0, 255, intensity)
+        else:  # 기준보다 가까이 있음
+            # 녹색에서 청록색으로 그라데이션 (0,255,0) -> (255,255,0) [BGR 순서]
+            intensity = min(255, int(abs(z_value) * 10))
+            depth_color = (intensity, 255, 0)
+
+        # 현재 CoM 표시 (색상은 절대적 Z값 기준)
+        cv2.circle(frame, (int(com_3d[0]), int(com_3d[1])), 8, depth_color, -1)
+
+        # Z값 텍스트 표시
+        cv2.putText(frame, f"CoM z:{int(z_value)}",
+                (int(com_3d[0]) + 10, int(com_3d[1]) - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
         return frame
 
     def _draw_trajectory(self, frame, com_3d):
@@ -143,7 +169,7 @@ class PoseTrackingSystem3D:
 
     def _draw_direction(self, frame, com_3d):
         """
-        이동 방향 화살표 그리기
+        이동 방향 화살표 그리기 - Z축 방향 지속 시간 증가
         Args:
             frame: 처리할 프레임
             com_3d: CoM 위치 (x, y, z)
@@ -155,34 +181,95 @@ class PoseTrackingSystem3D:
             return frame
 
         try:
-            # 이동 방향 계산 결과를 직접 변수에 할당하지 않고 result로 받기
-            result = self.com_calculator.calculate_movement_direction(
+            # 이동 방향 계산
+            direction_vector, speed = self.com_calculator.calculate_movement_direction(
                 self.com_trajectory, window_size=5)
 
-            # 결과의 구조 확인 및 올바른 언패킹
-            if isinstance(result, tuple) and len(result) == 2:
-                direction, speed = result
-            else:
-                # 예상치 못한 결과 형식인 경우 기본값 사용
-                logger.warning(f"Unexpected result format from calculate_movement_direction: {result}")
-                # 차원 확인하여 기본값 설정
-                is_3d = len(com_3d) == 3
-                direction = (0, 0, 0) if is_3d else (0, 0)
-                speed = 0
+            # Z방향 지속성 처리
+            z_direction_threshold = 0.6
+            current_z_direction = None
 
-            # 방향 시각화
+            # 3D 벡터이고 Z값 기준선이 초기화된 경우에만 Z 방향 처리
+            if (len(direction_vector) == 3 and
+                hasattr(self.pose_estimator, 'z_baseline') and
+                self.pose_estimator.z_baseline is not None):
+
+                # Z축 방향 성분이 임계값을 넘는 경우 현재 방향 저장
+                if abs(direction_vector[2]) > z_direction_threshold:
+                    current_z_direction = direction_vector[2]
+                    current_strength = abs(direction_vector[2])
+
+                    # 새로운 강한 Z 방향이 감지되면 히스토리 업데이트 및 지속 시간 설정
+                    if (self.z_direction_history["direction"] is None or
+                        np.sign(current_z_direction) != np.sign(self.z_direction_history["direction"]) or
+                        current_strength > self.z_direction_history["strength"] * 1.2):  # 20% 더 강한 경우만 업데이트
+
+                        # 새로운 방향 저장
+                        self.z_direction_history["direction"] = current_z_direction
+                        self.z_direction_history["strength"] = current_strength
+
+                        # 강도에 비례하여 지속 시간 설정 (강도가 높을수록 더 오래 표시)
+                        duration_scale = min(1.0, (current_strength - z_direction_threshold) / 0.4)
+                        new_duration = int(self.z_direction_min_duration +
+                                        duration_scale * (self.z_direction_max_duration - self.z_direction_min_duration))
+
+                        # 기존 지속 시간이 있는 경우 연장 (최대값 사용)
+                        self.z_direction_history["duration"] = max(self.z_direction_history["duration"], new_duration)
+
+                    # 같은 방향의 움직임이 계속되는 경우 지속 시간 연장 (최대 절반까지)
+                    elif np.sign(current_z_direction) == np.sign(self.z_direction_history["direction"]):
+                        # 현재 지속 시간의 절반만큼 추가 (과도한 누적 방지)
+                        extension = int(self.z_direction_min_duration * 0.5)
+                        self.z_direction_history["duration"] = min(
+                            self.z_direction_max_duration,  # 최대값 제한
+                            self.z_direction_history["duration"] + extension  # 지속 시간 연장
+                        )
+
+            # 2D 방향 화살표는 항상 그리기
             frame = self.skeleton_visualizer.draw_direction_arrow(
-                frame, com_3d, direction, speed)
+                frame, com_3d, direction_vector[:2] if len(direction_vector) == 3 else direction_vector, speed)
+
+            # 현재 유효한 Z 방향 히스토리가 있고 지속 시간이 남아있으면 Z 방향 화살표 표시
+            if (self.z_direction_history["direction"] is not None and
+                self.z_direction_history["duration"] > 0):
+
+                # Z 방향 벡터 생성 (현재 XY 방향과 저장된 Z 방향 결합)
+                if len(direction_vector) == 3:
+                    persistent_z_direction = (
+                        direction_vector[0],
+                        direction_vector[1],
+                        self.z_direction_history["direction"]
+                    )
+                else:
+                    persistent_z_direction = (
+                        direction_vector[0],
+                        direction_vector[1],
+                        self.z_direction_history["direction"]
+                    )
+
+                # Z 방향 시각화 (히스토리 기반)
+                frame = self.skeleton_visualizer.draw_3d_direction(
+                    frame, com_3d, persistent_z_direction, speed)
+
+                # 지속 시간 감소 (더 천천히 감소하도록 수정)
+                if self.z_direction_history["duration"] > 0:
+                    # 매 2프레임마다 1씩 감소 (더 오래 지속)
+                    if frame.shape[0] % 2 == 0:  # 프레임 번호를 이용한 간단한 방법
+                        self.z_direction_history["duration"] -= 1
+
+                # 지속 시간이 다 되면 히스토리 초기화
+                if self.z_direction_history["duration"] <= 0:
+                    self.z_direction_history["direction"] = None
+                    self.z_direction_history["strength"] = 0
 
         except Exception as e:
             logger.error(f"Error drawing direction arrow: {e}", exc_info=True)
-            # 오류 발생 시에도 원본 프레임은 반환
 
         return frame
 
     def process_frame(self, frame):
         """
-        프레임 처리 및 3D 포즈 추적
+        프레임 처리 및 3D 포즈 추적 - Z값과 Z방향 구분 시각화
         Args:
             frame (numpy.ndarray): 입력 프레임
         Returns:
@@ -206,18 +293,23 @@ class PoseTrackingSystem3D:
                 return processed_frame
 
             # 4. 시각화
-            # 4.1 CoM 시각화
+            # 4.1 CoM 시각화 (Z값 기준 색상)
             processed_frame = self._visualize_com(processed_frame, com_3d)
 
             # 4.2 궤적 그리기
             processed_frame = self._draw_trajectory(processed_frame, com_3d)
 
-            # 4.3 이동 방향 화살표 그리기
+            # 4.3 이동 방향 화살표 그리기 (Z방향 별도 표시)
             processed_frame = self._draw_direction(processed_frame, com_3d)
 
             # 4.4 스켈레톤 시각화
             processed_frame = self.skeleton_visualizer.draw_3d_skeleton(
                 processed_frame, keypoints_3d, filtered_keypoints_3d)
+
+            # 4.5 컨트롤 안내 추가 (화면 하단)
+            frame_height, frame_width = processed_frame.shape[:2]
+            cv2.putText(processed_frame, "ESC or Q: Exit",
+                    (10, frame_height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
         except Exception as e:
             logger.error(f"Error processing frame: {e}", exc_info=True)
@@ -385,8 +477,6 @@ class PoseTrackingSystem3D:
         percentage = frame_count / total_frames * 100
         logger.info(f"Processing: {frame_count}/{total_frames} frames ({percentage:.1f}%)")
 
-
-# 메인 함수
 def main():
     # 명령줄 인자 파싱
     parser = argparse.ArgumentParser(description='Pose Tracking with CoM and Movement Direction')

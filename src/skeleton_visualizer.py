@@ -13,7 +13,7 @@ class SkeletonVisualizer:
         self.connection_color = (0, 255, 0)  # 녹색
         self.landmark_color = (255, 0, 0)    # 빨간색
         self.filtered_landmark_color = (0, 0, 255)  # 파란색
-        self.line_thickness = 2
+        self.line_thickness = 1
         self.circle_radius = 4
 
         # 미리 연결 정보 저장
@@ -104,33 +104,33 @@ class SkeletonVisualizer:
             cv2.circle(frame, (int(x), int(y)), self.circle_radius, self.landmark_color, -1)
 
             # Z 정보 텍스트 표시 (주요 관절에만)
-            if i in [0, 11, 12, 23, 24]:  # 코, 어깨, 골반
+            if i in [11, 12, 23, 24]:  # 어깨, 골반
                 z_text = f"z:{int(z)}"
                 cv2.putText(frame, z_text, (int(x) + 5, int(y) - 5),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
         # 필터링된 3D 랜드마크 표시 (있는 경우)
         if filtered_keypoints_3d:
-            # 필터링된 랜드마크 연결선 그리기
-            for connection in self.pose_connections:
-                start_idx, end_idx = connection
+            # # 필터링된 랜드마크 연결선 그리기
+            # for connection in self.pose_connections:
+            #     start_idx, end_idx = connection
 
-                if start_idx < len(filtered_keypoints_3d) and end_idx < len(filtered_keypoints_3d):
-                    start_point = (int(filtered_keypoints_3d[start_idx][0]),
-                                  int(filtered_keypoints_3d[start_idx][1]))
-                    end_point = (int(filtered_keypoints_3d[end_idx][0]),
-                                int(filtered_keypoints_3d[end_idx][1]))
+            #     if start_idx < len(filtered_keypoints_3d) and end_idx < len(filtered_keypoints_3d):
+            #         start_point = (int(filtered_keypoints_3d[start_idx][0]),
+            #                       int(filtered_keypoints_3d[start_idx][1]))
+            #         end_point = (int(filtered_keypoints_3d[end_idx][0]),
+            #                     int(filtered_keypoints_3d[end_idx][1]))
 
-                    # Z 값에 따른 색상 변화
-                    start_z = filtered_keypoints_3d[start_idx][2]
-                    end_z = filtered_keypoints_3d[end_idx][2]
-                    avg_z = (start_z + end_z) / 2
+            #         # Z 값에 따른 색상 변화
+            #         start_z = filtered_keypoints_3d[start_idx][2]
+            #         end_z = filtered_keypoints_3d[end_idx][2]
+            #         avg_z = (start_z + end_z) / 2
 
-                    # Z값 범위를 색상으로 매핑
-                    color_intensity = max(0, min(255, int(255 - abs(avg_z) * 5)))
-                    z_color = (0, 0, color_intensity)  # 깊이에 따른 파란색 변화
+            #         # Z값 범위를 색상으로 매핑
+            #         color_intensity = max(0, min(255, int(255 - abs(avg_z) * 5)))
+            #         z_color = (0, 0, color_intensity)  # 깊이에 따른 파란색 변화
 
-                    cv2.line(frame, start_point, end_point, z_color, self.line_thickness // 2)
+            #         cv2.line(frame, start_point, end_point, z_color, self.line_thickness // 2)
 
             # 필터링된 랜드마크 점 그리기
             for i, (x, y, z) in enumerate(filtered_keypoints_3d):
@@ -154,7 +154,7 @@ class SkeletonVisualizer:
             (0, 9), (9, 11), (9, 12)
         ]
         return connections
-    
+
     def draw_direction_arrow(self, frame, com, direction, speed, scale=100):
         """
         이동 방향 화살표 그리기 (카메라 움직임에 덜 민감하게 수정)
@@ -182,7 +182,7 @@ class SkeletonVisualizer:
             color = (150, 150, 150)  # 회색
             arrow_length = 15  # 최소 화살표 길이
 
-            # 텍스트에 '속도 표시' 추가 (한글 대신 숫자 표시)
+            # 텍스트에 '속도 표시'
             cv2.putText(frame, f"{speed:.1f} px/s",
                         (start_point[0] + 15, start_point[1] - 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
@@ -214,9 +214,9 @@ class SkeletonVisualizer:
 
         return frame
 
-    def draw_3d_direction(self, frame, com, direction, speed, scale=100):  # scale 값 증가
+    def draw_3d_direction(self, frame, com, direction, speed, scale=100):
         """
-        3D 이동 방향 시각화
+        3D 이동 방향 시각화 - Z축 표현 각도 조정
         Args:
             frame: 시각화할 프레임
             com: CoM 위치 (x, y, z)
@@ -229,22 +229,48 @@ class SkeletonVisualizer:
         # 2D 화살표 그리기 (기본)
         frame = self.draw_direction_arrow(frame, com, direction[:2], speed, scale)
 
-        # Z축 방향 표시 (색상 또는 크기로)
+        # Z축 방향 표시를 위한 준비
         z_direction = direction[2]
 
-        # Z축 방향에 따른 시각화 (예: 원의 색상으로 표현)
-        # z_direction > 0.5: (0, 0, 255) = 빨간색 - 카메라에서 멀어지는 움직임
-        # z_direction < -0.5: (255, 0, 0) = 파란색 - 카메라로 다가오는 움직임
-        z_color = (0, 0, 255) if z_direction > 0.8 else (255, 0, 0) if z_direction < -0.8 else (255, 255, 255)
+        # Z 방향 임계값 - 더 확실한 Z축 움직임이 있을 때만 표시
+        z_direction_threshold = 0.6
 
-        # Z 방향 표시 원
-        cv2.circle(frame, (int(com[0]), int(com[1])), 10, z_color, -1)  # 원 크기 증가
+        # 의미 있는 Z 방향 움직임이 있을 때만 표시
+        if abs(z_direction) > z_direction_threshold:
+            # CoM 위치 (중심점)
+            center_x = int(com[0])
+            center_y = int(com[1])
 
-        # # Z 방향 텍스트
-        # if abs(z_direction) > 0.8:
-        #     z_text = "FWD" if z_direction > 0 else "BWD"
-        #     cv2.putText(frame, z_text,
-        #                 (int(com[0]) - 15, int(com[1]) + 30),  # 위치 조정
-        #                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+            # 화살표 방향각도 및 길이 설정
+            arrow_length = int(25 + abs(z_direction) * 15)  # 화살표 길이
+
+            # Z 방향에 따라 각도와 색상 결정 (정확히 반대 방향으로)
+            if z_direction > 0:  # 카메라에서 멀어지는 방향
+                # 왼쪽 위로 210도 각도 (CoM Closer의 정확히 반대 방향)
+                angle = 210  # 각도 (도 단위)
+                arrow_color = (255, 0, 0)  # 파란색
+
+            else:  # 카메라로 다가오는 방향
+                # 오른쪽 아래로 30도 각도
+                angle = 30  # 각도 (도 단위, 양수는 시계 방향)
+                arrow_color = (0, 255, 0)  # 녹색
+
+            # 각도를 라디안으로 변환
+            angle_rad = angle * np.pi / 180
+
+            # 화살표 끝점 계산
+            end_x = int(center_x + arrow_length * np.cos(angle_rad))
+            end_y = int(center_y + arrow_length * np.sin(angle_rad))
+
+            # 좀 더 두껍고 명확한 화살표 그리기
+            cv2.arrowedLine(frame,
+                        (center_x, center_y),
+                        (end_x, end_y),
+                        arrow_color,
+                        2,  # 두께
+                        tipLength=0.3)  # 화살표 팁 길이 비율
+
+            # 좀 더 큰 원으로 시작점 강조 (3D 느낌 강화)
+            cv2.circle(frame, (center_x, center_y), 4, arrow_color, -1)
 
         return frame

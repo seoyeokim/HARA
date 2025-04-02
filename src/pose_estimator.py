@@ -81,7 +81,7 @@ class PoseEstimator:
 
         # 프레임에 ROI 시각화
         output_frame = frame.copy()
-        cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        # ROI 박스 그리기 코드 제거: cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
         # 랜드마크 좌표 보정
         if results.pose_landmarks:
@@ -116,6 +116,15 @@ class PoseEstimator3D:
         )
 
         self.roi_ratio = roi_ratio
+
+        # Z값 안정화를 위한 변수 추가
+        self.z_history = {}  # 키포인트별 Z값 이력 저장
+        self.z_history_max_length = 10  # 이력 길이 (프레임 수)
+        self.z_baseline = None  # 기준 Z값 (초기화 후 설정)
+        self.z_scale_factor = 0.5  # Z값 스케일 감소 (변화 줄이기)
+        self.initialization_frames = 30  # 초기화에 사용할 프레임 수
+        self.frame_count = 0  # 프레임 카운터
+        self.initial_z_values = []  # 초기 Z값 저장용
 
     def _calculate_roi(self, frame):
         """
@@ -174,7 +183,7 @@ class PoseEstimator3D:
 
         # 프레임에 ROI 시각화
         output_frame = frame.copy()
-        cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        # ROI 박스 그리기 코드 제거: cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
         # 랜드마크 좌표 보정
         if results.pose_landmarks:
@@ -202,16 +211,85 @@ class PoseEstimator3D:
 
         # 3D 키포인트 리스트 (x, y, z)
         keypoints_3d = []
+        raw_z_values = []
 
-        for landmark in landmarks.landmark:
+        for i, landmark in enumerate(landmarks.landmark):
             # 2D 좌표 변환
             x = int(landmark.x * width)
             y = int(landmark.y * height)
 
-            # 깊이 추정 (MediaPipe의 z 값 사용)
-            # landmark.z는 MediaPipe에서 제공하는 상대적 깊이 값
-            z = int(landmark.z * width)  # 깊이를 너비 기준으로 스케일링
+            # 원시 Z값 획득 (아직 처리하지 않음)
+            raw_z = landmark.z * width  # 깊이를 너비 기준으로 스케일링
+            raw_z_values.append(raw_z)
 
-            keypoints_3d.append((x, y, z))
+            # 임시로 원시 Z값 사용 (이후에 안정화된 값으로 교체)
+            keypoints_3d.append((x, y, raw_z))
 
-        return keypoints_3d
+        # 초기화 단계: 처음 N프레임 동안 기준 Z값 계산
+        if self.frame_count < self.initialization_frames:
+            self.initial_z_values.append(raw_z_values)
+            self.frame_count += 1
+
+            # 초기화 완료 시 기준 Z값 설정
+            if self.frame_count == self.initialization_frames:
+                # 각 키포인트별로 초기 프레임의 중간값 계산
+                z_medians = []
+                for i in range(len(raw_z_values)):
+                    keypoint_z_values = [frame_data[i] for frame_data in self.initial_z_values]
+                    z_medians.append(np.median(keypoint_z_values))
+
+                self.z_baseline = z_medians
+                print("Z값 기준선 초기화 완료")
+
+        # Z값 안정화 처리
+        stabilized_keypoints_3d = self._stabilize_z_values(keypoints_3d)
+
+        return stabilized_keypoints_3d
+
+    def _stabilize_z_values(self, keypoints_3d):
+        """
+        Z값 안정화 처리 메서드
+        Args:
+            keypoints_3d: 원시 3D 키포인트 리스트
+        Returns:
+            list: 안정화된 3D 키포인트 리스트
+        """
+        stabilized_keypoints = []
+
+        for i, (x, y, z) in enumerate(keypoints_3d):
+            # 키포인트 히스토리 초기화 (없는 경우)
+            if i not in self.z_history:
+                self.z_history[i] = []
+
+            # 기준선이 설정되었으면 Z값 보정
+            if self.z_baseline is not None:
+                # 기준 Z값과의 차이 계산 (변화량)
+                z_diff = z - self.z_baseline[i]
+
+                # 변화량 스케일 조정 (감소)
+                scaled_z_diff = z_diff * self.z_scale_factor
+
+                # 새로운 Z값 = 기준값 + 조정된 변화량
+                adjusted_z = self.z_baseline[i] + scaled_z_diff
+
+                # 이력에 추가
+                self.z_history[i].append(adjusted_z)
+
+                # 이력 길이 제한
+                if len(self.z_history[i]) > self.z_history_max_length:
+                    self.z_history[i].pop(0)
+
+                # 이동 평균 계산 (최근 N개 프레임)
+                final_z = np.mean(self.z_history[i])
+            else:
+                # 초기화 전에는 원시 Z값 그대로 사용
+                final_z = z
+                self.z_history[i].append(z)
+
+                # 이력 길이 제한
+                if len(self.z_history[i]) > self.z_history_max_length:
+                    self.z_history[i].pop(0)
+
+            stabilized_keypoints.append((x, y, final_z))
+
+        return stabilized_keypoints

@@ -423,7 +423,7 @@ class PoseTrackingSystem3D:
         else:
             # 카메라 입력
             logger.info(f"Attempting to open camera: {input_source} on {os_name}")
-                        
+
             if os_name == "Darwin": # macOS
                 # macOS에서는 AVFOUNDATION 백엔드 사용
                 cap = cv2.VideoCapture(input_source, cv2.CAP_AVFOUNDATION)
@@ -432,10 +432,7 @@ class PoseTrackingSystem3D:
                 cap = cv2.VideoCapture(input_source, cv2.CAP_DSHOW)
             else: # Linux 등 기타
                 cap = cv2.VideoCapture(input_source, cv2.CAP_V4L2)
-
-            if not backends: # 기본값 (운영체제 특정 백엔드가 없을 경우)
-                cap = cv2.VideoCapture(input_source, cv2.CAP_ANY)
-
+                
             # 카메라 속성 설정 (720p)
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)

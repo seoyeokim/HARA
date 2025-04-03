@@ -171,7 +171,7 @@ class PoseTrackingSystem3D:
 
     def _draw_direction(self, frame, com_3d):
         """
-        이동 방향 화살표 그리기 - Z축 방향 지속 시간 증가
+        이동 방향 화살표 그리기
         Args:
             frame: 처리할 프레임
             com_3d: CoM 위치 (x, y, z)
@@ -187,82 +187,49 @@ class PoseTrackingSystem3D:
             direction_vector, speed = self.com_calculator.calculate_movement_direction(
                 self.com_trajectory, window_size=5)
 
-            # Z방향 지속성 처리
-            z_direction_threshold = 0.6
-            current_z_direction = None
-
-            # 3D 벡터이고 Z값 기준선이 초기화된 경우에만 Z 방향 처리
-            if (len(direction_vector) == 3 and
-                hasattr(self.pose_estimator, 'z_baseline') and
-                self.pose_estimator.z_baseline is not None):
-
-                # Z축 방향 성분이 임계값을 넘는 경우 현재 방향 저장
-                if abs(direction_vector[2]) > z_direction_threshold:
-                    current_z_direction = direction_vector[2]
-                    current_strength = abs(direction_vector[2])
-
-                    # 새로운 강한 Z 방향이 감지되면 히스토리 업데이트 및 지속 시간 설정
-                    if (self.z_direction_history["direction"] is None or
-                        np.sign(current_z_direction) != np.sign(self.z_direction_history["direction"]) or
-                        current_strength > self.z_direction_history["strength"] * 1.2):  # 20% 더 강한 경우만 업데이트
-
-                        # 새로운 방향 저장
-                        self.z_direction_history["direction"] = current_z_direction
-                        self.z_direction_history["strength"] = current_strength
-
-                        # 강도에 비례하여 지속 시간 설정 (강도가 높을수록 더 오래 표시)
-                        duration_scale = min(1.0, (current_strength - z_direction_threshold) / 0.4)
-                        new_duration = int(self.z_direction_min_duration +
-                                        duration_scale * (self.z_direction_max_duration - self.z_direction_min_duration))
-
-                        # 기존 지속 시간이 있는 경우 연장 (최대값 사용)
-                        self.z_direction_history["duration"] = max(self.z_direction_history["duration"], new_duration)
-
-                    # 같은 방향의 움직임이 계속되는 경우 지속 시간 연장 (최대 절반까지)
-                    elif np.sign(current_z_direction) == np.sign(self.z_direction_history["direction"]):
-                        # 현재 지속 시간의 절반만큼 추가 (과도한 누적 방지)
-                        extension = int(self.z_direction_min_duration * 0.5)
-                        self.z_direction_history["duration"] = min(
-                            self.z_direction_max_duration,  # 최대값 제한
-                            self.z_direction_history["duration"] + extension  # 지속 시간 연장
-                        )
-
             # 2D 방향 화살표는 항상 그리기
             frame = self.skeleton_visualizer.draw_direction_arrow(
                 frame, com_3d, direction_vector[:2] if len(direction_vector) == 3 else direction_vector, speed)
 
-            # 현재 유효한 Z 방향 히스토리가 있고 지속 시간이 남아있으면 Z 방향 화살표 표시
-            if (self.z_direction_history["direction"] is not None and
-                self.z_direction_history["duration"] > 0):
+            # # Z축 방향 처리 조건 확인
+            # if (len(direction_vector) == 3 and
+            #     hasattr(self.pose_estimator, 'z_baseline') and
+            #     self.pose_estimator.z_baseline is not None):
 
-                # Z 방향 벡터 생성 (현재 XY 방향과 저장된 Z 방향 결합)
-                if len(direction_vector) == 3:
-                    persistent_z_direction = (
-                        direction_vector[0],
-                        direction_vector[1],
-                        self.z_direction_history["direction"]
-                    )
-                else:
-                    persistent_z_direction = (
-                        direction_vector[0],
-                        direction_vector[1],
-                        self.z_direction_history["direction"]
-                    )
+            #     z_direction = direction_vector[2]
+            #     z_threshold = 0.9
 
-                # Z 방향 시각화 (히스토리 기반)
-                frame = self.skeleton_visualizer.draw_3d_direction(
-                    frame, com_3d, persistent_z_direction, speed)
+            #     # 의미 있는 Z 방향 감지 시
+            #     if abs(z_direction) > z_threshold:
+            #         # 현재 방향과 강도 저장
+            #         self.z_direction_history["direction"] = z_direction
+            #         self.z_direction_history["strength"] = abs(z_direction)
 
-                # 지속 시간 감소 (더 천천히 감소하도록 수정)
-                if self.z_direction_history["duration"] > 0:
-                    # 매 2프레임마다 1씩 감소 (더 오래 지속)
-                    if frame.shape[0] % 2 == 0:  # 프레임 번호를 이용한 간단한 방법
-                        self.z_direction_history["duration"] -= 1
+            #         # 간단한 지속 시간 설정: 기본 30프레임, 강한 움직임이면 최대 60프레임
+            #         base_duration = 30  # 기본 지속 시간 (약 1초)
+            #         extra_duration = int(min(30, abs(z_direction) * 50))  # 강도에 비례한 추가 지속 시간
+            #         self.z_direction_history["duration"] = base_duration + extra_duration
 
-                # 지속 시간이 다 되면 히스토리 초기화
-                if self.z_direction_history["duration"] <= 0:
-                    self.z_direction_history["direction"] = None
-                    self.z_direction_history["strength"] = 0
+            #     # Z 방향 화살표 표시 (지속 시간이 남아있는 경우)
+            #     if self.z_direction_history["duration"] > 0:
+            #         # Z 방향 벡터 생성 (현재 XY 방향과 저장된 Z 방향 결합)
+            #         z_arrow_direction = (
+            #             direction_vector[0],
+            #             direction_vector[1],
+            #             self.z_direction_history["direction"]
+            #         )
+
+            #         # Z 방향 시각화
+            #         frame = self.skeleton_visualizer.draw_3d_direction(
+            #             frame, com_3d, z_arrow_direction, speed)
+
+            #         # 매 프레임마다 지속 시간 감소
+            #         self.z_direction_history["duration"] -= 1
+
+            #         # 지속 시간이 끝났을 때 초기화
+            #         if self.z_direction_history["duration"] <= 0:
+            #             self.z_direction_history["direction"] = None
+            #             self.z_direction_history["strength"] = 0
 
         except Exception as e:
             logger.error(f"Error drawing direction arrow: {e}", exc_info=True)

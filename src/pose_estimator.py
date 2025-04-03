@@ -7,7 +7,8 @@ class PoseEstimator3D:
     def __init__(self,
                  min_detection_confidence=0.5,
                  min_tracking_confidence=0.5,
-                 roi_padding=40):
+                 roi_padding=40,
+                 roi_ratio=0.8):
         """
         MediaPipe 3D 포즈 추정기 초기화 (동적 ROI 지원)
         Args:
@@ -28,6 +29,7 @@ class PoseEstimator3D:
         self.roi_bbox = None  # 현재 ROI 영역 [x_min, y_min, x_max, y_max]
         self.roi_active = False # 현재 ROI를 사용 중인지 여부
         self.roi_padding = roi_padding # 픽셀 단위 패딩
+        self.roi_ratio = roi_ratio # 기본 ROI 크기 비율
 
         # Z값 안정화를 위한 변수 추가
         self.z_history = {}  # 키포인트별 Z값 이력 저장
@@ -37,6 +39,24 @@ class PoseEstimator3D:
         self.initialization_frames = 30  # 초기화에 사용할 프레임 수
         self.frame_count = 0  # 프레임 카운터
         self.initial_z_values = []  # 초기 Z값 저장용
+
+    def _calculate_default_roi(self, width, height):
+        """프레임 크기 기반으로 기본 ROI(화면 중앙) 계산"""
+
+        # 짧은 차원을 기준으로 ROI 크기 결정
+        roi_size = int(min(width, height) * self.roi_ratio)
+
+        # 화면 중심 계산
+        center_x = width // 2
+        center_y = height // 2
+
+        # ROI 좌표 계산 (정수 변환)
+        x1 = int(max(0, center_x - roi_size // 2))
+        y1 = int(max(0, center_y - roi_size // 2))
+        x2 = int(min(width, x1 + roi_size)) # x1 기준 크기 더하기
+        y2 = int(min(height, y1 + roi_size)) # y1 기준 크기 더하기
+
+        return (x1, y1, x2, y2)
 
     def _calculate_roi(self, landmarks, frame):
         """
@@ -49,21 +69,16 @@ class PoseEstimator3D:
         """
         height, width = frame.shape[:2]
 
+        
+        # 랜드마크가 없거나 빈 리스트인 경우 기본 ROI 계산
         if not landmarks:
-            return None
+            # print("No landmarks provided, calculating default ROI.") # 디버깅용
+            return self._calculate_default_roi(width, height)
 
         # Normalized 좌표를 픽셀 좌표로 변환
-        try:
-            x_values = [lm.x * width for lm in landmarks]
-            y_values = [lm.y * height for lm in landmarks]
-
-            if not x_values or not y_values: # 유효 좌표 없으면 실패
-                 return None
-
-        except AttributeError: # landmarks 구조가 다를 경우
-             print("Error: Landmarks object structure unexpected.")
-             return None
-        
+        x_values = [lm.x * width for lm in landmarks]
+        y_values = [lm.y * height for lm in landmarks]
+            
         # 랜드마크 기반 ROI 좌표 계산
         x_min = min(x_values)
         y_min = min(y_values)
@@ -86,7 +101,7 @@ class PoseEstimator3D:
         if x_min < x_max and y_min < y_max:
             return (x_min, y_min, x_max, y_max)
         else:
-            return None
+            return self._calculate_default_roi(width, height)
 
     def estimate_pose(self, frame):
         """
@@ -123,10 +138,10 @@ class PoseEstimator3D:
                      print(f"Error cropping ROI: {e}. Processing full frame instead.")
                      input_image = frame_rgb # 에러 시 전체 프레임으로 복귀
                      self.roi_active = False # ROI 비활성화
-                     self.roi_bbox = None
+                     self.roi_bbox = self._calculate_default_roi(width, height)
             else:
                 self.roi_active = False
-                self.roi_bbox = None
+                self.roi_bbox = self._calculate_default_roi(width, height)
                 input_image = frame_rgb # 전체 프레임 사용
 
         # MediaPipe 포즈 처리
@@ -140,7 +155,7 @@ class PoseEstimator3D:
             print(f"Error during MediaPipe pose processing: {e}")
             # 에러 발생 시 ROI 비활성화하여 다음 프레임은 전체 처리 시도
             self.roi_active = False
-            self.roi_bbox = None
+            self.roi_bbox = self._calculate_default_roi(width, height)
 
 
         # 결과 처리 및 다음 ROI 계산
@@ -175,40 +190,26 @@ class PoseEstimator3D:
             else:
                 # 랜드마크는 감지했지만 ROI 계산 실패한 경우
                 self.roi_active = False
-                self.roi_bbox = None
+                self.roi_bbox = self._calculate_default_roi(width, height)
 
         else:
             # 랜드마크 감지 실패
             if process_in_roi:
                 self.roi_active = False
-                self.roi_bbox = None
+                self.roi_bbox = self._calculate_default_roi(width, height)
 
         # 시각화
-        # 1. 현재 ROI 영역 그리기 (감지된 경우, 파란색 박스)
+        # ROI 영역 시각화 (감지된 경우, 파란색 박스)
         if self.roi_active and self.roi_bbox:
              x1, y1, x2, y2 = self.roi_bbox
-             # ROI 박스 그리기 코드 제거: cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        elif not self.roi_active: # 비활성 상태 표시
+             cv2.rectangle(output_frame, (x1, y1), (x2, y2), (255, 0, 0), 3)
+        elif not self.roi_active and self.roi_bbox:  # ROI 비활성 상태 표시 (self.roi_bbox 확인 추가)
+             x1, y1, x2, y2 = self.roi_bbox
+             cv2.rectangle(output_frame, (x1, y1), (x2, y2), (255, 0, 0), 3)
              cv2.putText(output_frame, "ROI Inactive", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
-
-        # 2. 포즈 랜드마크 그리기 (감지된 경우, 초록색 점, 빨간색 선)
-        if corrected_landmarks_object:
-            mp.solutions.drawing_utils.draw_landmarks(
-                output_frame,
-                corrected_landmarks_object,
-                mp.solutions.pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=mp.solutions.drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                connection_drawing_spec=mp.solutions.drawing_utils.DrawingSpec(color=(0, 0, 255), thickness=2))
-
+             
         return corrected_landmarks_object, output_frame
-
-    def close(self):
-        """MediaPipe 리소스 해제"""
-        self.pose.close()
-        print("MediaPipe Pose resources released.")
-
-
+    
     def extract_3d_keypoints(self, landmarks, frame):
         """
         3D 키포인트 추출 (깊이 추정 포함)

@@ -19,13 +19,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class PoseTrackingSystem3D:
-    def __init__(self, roi_padding):
+    def __init__(self, roi_padding, roi_ratio):
         """
         3D 포즈 추적 시스템 초기화
         Args:
             roi_padding (int): 감지된 랜드마크 주변 ROI 여유 공간 (픽셀)
+            roi_ratio (float): ROI 크기 비율 (0.0 ~ 1.0)
         """
-        self.pose_estimator = PoseEstimator3D(roi_padding=roi_padding)
+        self.pose_estimator = PoseEstimator3D(roi_padding=roi_padding, roi_ratio=roi_ratio)
         self.kalman_tracker = KalmanFilterTracker3D()
         self.skeleton_visualizer = SkeletonVisualizer()
         self.com_calculator = COMCalculator()
@@ -489,8 +490,10 @@ def main():
     parser = argparse.ArgumentParser(description='Pose Tracking with CoM and Movement Direction')
     parser.add_argument('-i', '--input', type=str, default='0',
                         help='입력 소스 (카메라 인덱스 또는 비디오 파일 경로). 기본값: 0 (기본 카메라)')
-    parser.add_argument('-r', '--roi', type=float, default=40,
-                        help='ROI 여유 공간 (픽셀). 기본값: 40')
+    parser.add_argument('-p', '--padding', type=float, default=80,
+                        help='ROI 여유 공간 (픽셀). 기본값: 80')
+    parser.add_argument('-r', '--roi', type=float, default=0.95,
+                        help='ROI 비율 (0.0~1.0). 기본값: 0.95')
     args = parser.parse_args()
 
     # 입력 소스 처리
@@ -503,7 +506,7 @@ def main():
             sys.exit(1)
 
     # 시스템 초기화 및 실행
-    pose_tracking = PoseTrackingSystem3D(roi_padding=args.roi)
+    pose_tracking = PoseTrackingSystem3D(roi_padding=args.padding, roi_ratio=args.roi)
     pose_tracking.run(input_source)
 
 

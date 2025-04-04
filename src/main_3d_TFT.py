@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 
 class PoseTrackingSystem3D:
     def __init__(self, roi_padding, roi_ratio, use_tft=False, tft_checkpoint_dir=None,
-                tft_sequence_length=20, tft_binary_mode=False):
+                tft_sequence_length=20, tft_binary_mode=False, csv_export=True,
+                csv_filename='keypoints_export_normalized.csv'):
         """
         3D 포즈 추적 시스템 초기화
         Args:
@@ -45,6 +46,8 @@ class PoseTrackingSystem3D:
             tft_checkpoint_dir (str): TFT 모델 체크포인트 디렉터리 경로
             tft_sequence_length (int): TFT 모델 입력 시퀀스 길이
             tft_binary_mode (bool): 2클래스 TFT 모델 사용 여부 (True: 바이너리 모드, False: 4클래스 모드)
+            csv_export (bool): 키포인트 데이터를 CSV로 내보낼지 여부
+            csv_filename (str): 내보낼 CSV 파일 이름 (기본값 변경: 정규화된 데이터임을 명시)
         """
         self.pose_estimator = PoseEstimator3D(roi_padding=roi_padding, roi_ratio=roi_ratio)
         self.kalman_tracker = KalmanFilterTracker3D()
@@ -72,6 +75,10 @@ class PoseTrackingSystem3D:
         # TFT 바이너리 모드 설정
         self.tft_binary_mode = tft_binary_mode
 
+        # CSV 내보내기 설정
+        self.csv_export = csv_export
+        self.csv_filename = csv_filename
+
         # TFT 추론 시스템 초기화
         self.use_tft = use_tft and TFT_AVAILABLE
         self.tft_system = None
@@ -88,16 +95,22 @@ class PoseTrackingSystem3D:
                             checkpoint_dir=tft_checkpoint_dir,
                             max_encoder_length=tft_sequence_length,
                             use_mps=True,
-                            binary_mode=tft_binary_mode
+                            binary_mode=tft_binary_mode,
+                            csv_export=csv_export,
+                            csv_filename=csv_filename
                         )
                     else:
                         # binary_mode를 지원하지 않는 경우
                         self.tft_system = TFTInferenceSystem(
                             checkpoint_dir=tft_checkpoint_dir,
                             max_encoder_length=tft_sequence_length,
-                            use_mps=True
+                            use_mps=True,
+                            csv_export=csv_export,
+                            csv_filename=csv_filename
                         )
                     logger.info(f"TFT 추론 시스템이 성공적으로 초기화되었습니다. 클래스 수: {'2' if tft_binary_mode else '4'}")
+                    if csv_export:
+                        logger.info(f"키포인트 데이터를 {csv_filename} 파일로 내보냅니다.")
                 except Exception as e:
                     logger.error(f"TFT 추론 시스템 초기화 실패: {e}")
                     self.use_tft = False
@@ -520,6 +533,7 @@ class PoseTrackingSystem3D:
         percentage = frame_count / total_frames * 100
         logger.info(f"Processing: {frame_count}/{total_frames} frames ({percentage:.1f}%)")
 
+# main 함수에 인자 추가
 def main():
     # 명령줄 인자 파싱
     parser = argparse.ArgumentParser(description='Pose Tracking with CoM and Movement Direction')
@@ -540,6 +554,15 @@ def main():
     # 바이너리 모드 추가
     parser.add_argument('--binary', action='store_true',
                         help='2클래스 TFT 모델 사용 (Standing/Walking만 구분). 기본값: False (4클래스 모드)')
+
+    # CSV 내보내기
+    parser.add_argument('--csv-export', action='store_true', default=True,
+                        help='키포인트 데이터를 CSV로 내보내기 (기본값: True)')
+    parser.add_argument('--csv-filename', type=str, default='keypoints_export_normalized.csv',
+                        help='내보낼 CSV 파일 이름 (기본값: keypoints_export_normalized.csv)')
+
+    args = parser.parse_args()
+
     args = parser.parse_args()
 
     # 입력 소스 처리
@@ -572,6 +595,12 @@ def main():
     else:
         logger.info("TFT 추론 비활성화")
 
+    # CSV 내보내기 설정 로깅
+    if args.csv_export:
+        logger.info(f"CSV 내보내기 활성화: 파일명 = {args.csv_filename}")
+    else:
+        logger.info("CSV 내보내기 비활성화")
+
     # 시스템 초기화 및 실행
     pose_tracking = PoseTrackingSystem3D(
         roi_padding=args.padding,
@@ -579,7 +608,9 @@ def main():
         use_tft=args.tft,
         tft_checkpoint_dir=args.tft_checkpoint if args.tft else None,
         tft_sequence_length=args.tft_sequence,
-        tft_binary_mode=args.binary
+        tft_binary_mode=args.binary,
+        csv_export=args.csv_export,
+        csv_filename=args.csv_filename
     )
     pose_tracking.run(input_source)
 

@@ -198,6 +198,7 @@ class KeypointPreprocess:
 
         return preprosessed_keypoints
 
+'''
 class TFTKeypointPreprocess:
     def __init__(self, norm_type = None):
         self.scaler = MinMaxScaler()
@@ -459,3 +460,4 @@ class TFTKeypointPreprocess:
             self._debug_log(f"process: 키포인트 처리 중 예외 발생: {e}")
             traceback.print_exc()
             return [(0.0, 0.0, 0.0)] * 23  # 오류 발생 시 기본값 반환
+'''

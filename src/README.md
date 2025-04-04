@@ -24,5 +24,5 @@
   - ROI 비율 조정: python main_3d.py -i path/to/video.mp4 -r 0.7
 
 ### TFT 보행자 행동 추정
-- 카메라 사용: python main_TFT_inference.py -i 0 or python main_TFT_inference.py -i 0 -o 출력파일.mp4
-- 비디오 파일 처리: python main_TFT_inference.py -i 비디오파일.mp4
+- 4 class 분류 : python main_3d_TFT.py --tft -i path/to/video.mp4
+- 2 class 분류 : python main_3d_TFT.py --tft --binary -i path/to/video.mp4

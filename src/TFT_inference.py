@@ -8,9 +8,10 @@ from pathlib import Path
 import re
 from collections import deque
 import time
+import csv
 
 from pose_estimator import PoseEstimator3D
-from kalman_filter import KalmanFilterTracker3D, TFTKeypointPreprocess
+from kalman_filter import KalmanFilterTracker3D, KeypointPreprocess
 from skeleton_visualizer import SkeletonVisualizer
 from com_calculator import COMCalculator
 from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
@@ -842,7 +843,7 @@ class PedestrianBehaviorPredictor:
 
 
 class TFTInferenceSystem:
-    def __init__(self, checkpoint_dir, max_encoder_length=20, use_mps=True, binary_mode=False):
+    def __init__(self, checkpoint_dir, max_encoder_length=20, use_mps=True, binary_mode=False, csv_export=True, csv_filename='keypoints_export_normalized.csv'):
         """
         TFT 추론 시스템 초기화
 
@@ -850,9 +851,11 @@ class TFTInferenceSystem:
             checkpoint_dir: TFT 모델 체크포인트가 저장된 디렉터리
             max_encoder_length: TFT 모델 인코더의 최대 시퀀스 길이
             use_mps: MacOS에서 MPS 가속 사용 여부
-            binary_mode: 이진 분류 모드 사용 여부 (추가됨)
+            binary_mode: 이진 분류 모드 사용 여부
+            csv_export: CSV 파일로 키포인트 데이터 내보내기 여부
+            csv_filename: 내보낼 CSV 파일 이름
         """
-        self.tft_keypoint_processor = TFTKeypointPreprocess(True)
+        self.tft_keypoint_processor = KeypointPreprocess(norm_type='minmax')  # 정규화 모드 활성화
         self.binary_mode = binary_mode  # binary_mode 속성 추가
 
         # TFT 예측기 초기화
@@ -860,7 +863,7 @@ class TFTInferenceSystem:
             checkpoint_dir=checkpoint_dir,
             max_encoder_length=max_encoder_length,
             use_mps=use_mps,
-            binary_mode=binary_mode  # binary_mode 인자 전달 추가
+            binary_mode=binary_mode
         )
 
         # 행동 예측 결과를 위한 버퍼 (스무딩을 위해)
@@ -873,6 +876,37 @@ class TFTInferenceSystem:
         self.perf_monitor = {
             'prediction_times': deque(maxlen=30),  # 최근 30개 예측 시간
         }
+
+        # CSV 내보내기 설정
+        self.csv_export = csv_export
+        self.csv_filename = csv_filename
+
+        # CSV 파일 초기화 (헤더 작성)
+        if self.csv_export:
+            try:
+                with open(self.csv_filename, 'w', newline='') as csvfile:
+                    fieldnames = ['frame']
+
+                    # 11번부터 32번 키포인트까지의 x, y, z 컬럼 이름 생성
+                    for i in range(11, 33):
+                        fieldnames.extend([f'kp{i}_x', f'kp{i}_y', f'kp{i}_z'])
+
+                    # CoM 좌표
+                    fieldnames.extend(['com_x', 'com_y', 'com_z'])
+
+                    # 예측 클래스 및 확률
+                    fieldnames.extend(['predicted_class', 'predicted_class_name'])
+                    if self.binary_mode:
+                        fieldnames.extend(['prob_standing', 'prob_walking'])
+                    else:
+                        fieldnames.extend(['prob_standing', 'prob_start_walking', 'prob_walking', 'prob_finish_walking'])
+
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                print(f"CSV 파일 {self.csv_filename}이 생성되었습니다.")
+            except Exception as e:
+                print(f"CSV 파일 초기화 중 오류 발생: {e}")
+                self.csv_export = False
 
     def process_keypoints(self, keypoints_3d, com_3d, frame_id=None):
         """
@@ -916,8 +950,39 @@ class TFTInferenceSystem:
             keypoints_and_com = list(keypoints_for_prediction)
             keypoints_and_com.append(com_3d)
 
-            # 키포인트 전처리
+            # 키포인트 전처리 - 정규화 적용
             processed_keypoints = self.tft_keypoint_processor.process(keypoints_and_com)
+
+            # CSV 내보내기를 위한 정규화된 키포인트 데이터 준비
+            if self.csv_export:
+                # 내보내기를 위한 데이터 딕셔너리 초기화
+                csv_data = {'frame': frame_id}
+
+                # 정규화된 키포인트 데이터 저장 (11번부터 32번까지)
+                valid_kp_count = len(processed_keypoints) - 1  # CoM을 제외한 키포인트 수
+                for i in range(valid_kp_count):
+                    kp_idx = i + 11  # 11번 키포인트부터 시작
+                    if i < valid_kp_count:
+                        kp = processed_keypoints[i]
+                        csv_data[f'kp{kp_idx}_x'] = kp[0]
+                        csv_data[f'kp{kp_idx}_y'] = kp[1]
+                        csv_data[f'kp{kp_idx}_z'] = kp[2]
+                    else:
+                        # 키포인트가 없는 경우 0으로 채움
+                        csv_data[f'kp{kp_idx}_x'] = 0
+                        csv_data[f'kp{kp_idx}_y'] = 0
+                        csv_data[f'kp{kp_idx}_z'] = 0
+
+                # CoM 데이터는 정규화된 리스트의 마지막 항목
+                if len(processed_keypoints) > 0:
+                    com_processed = processed_keypoints[-1]
+                    csv_data['com_x'] = com_processed[0]
+                    csv_data['com_y'] = com_processed[1]
+                    csv_data['com_z'] = com_processed[2]
+                else:
+                    csv_data['com_x'] = 0
+                    csv_data['com_y'] = 0
+                    csv_data['com_z'] = 0
 
             # 프레임 데이터 추가
             df = self.behavior_predictor.prepare_data(processed_keypoints, frame_id)
@@ -951,6 +1016,31 @@ class TFTInferenceSystem:
                         smoothed_class = np.argmax(class_counts)
                         predicted_class = smoothed_class
                         predicted_class_name = self.behavior_predictor.class_names[smoothed_class]
+
+            # CSV에 예측 결과 추가
+            if self.csv_export:
+                # 예측 클래스와 클래스 이름 저장
+                csv_data['predicted_class'] = predicted_class if predicted_class is not None else -1
+                csv_data['predicted_class_name'] = predicted_class_name
+
+                # 확률 저장
+                if self.binary_mode:
+                    csv_data['prob_standing'] = probabilities[0]
+                    csv_data['prob_walking'] = probabilities[1]
+                else:
+                    csv_data['prob_standing'] = probabilities[0]
+                    csv_data['prob_start_walking'] = probabilities[1]
+                    csv_data['prob_walking'] = probabilities[2]
+                    csv_data['prob_finish_walking'] = probabilities[3]
+
+                # CSV 파일에 데이터 추가
+                try:
+                    with open(self.csv_filename, 'a', newline='') as csvfile:
+                        fieldnames = list(csv_data.keys())
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writerow(csv_data)
+                except Exception as e:
+                    print(f"CSV 파일 쓰기 중 오류 발생: {e}")
 
             # 예측 완료 시간 측정
             prediction_end_time = time.time()

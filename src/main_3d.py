@@ -400,7 +400,7 @@ class PoseTrackingSystem3D:
                 cap = cv2.VideoCapture(input_source, cv2.CAP_DSHOW)
             else: # Linux 등 기타
                 cap = cv2.VideoCapture(input_source, cv2.CAP_V4L2)
-                
+
             # 카메라 속성 설정 (720p)
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -419,7 +419,7 @@ class PoseTrackingSystem3D:
             cv2.VideoWriter: 설정된 비디오 라이터 객체
         """
         output_path = f"output_{os.path.basename(input_source)}"
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 또는 'avc1', 'H264'
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

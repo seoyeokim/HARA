@@ -7,7 +7,7 @@ class PoseEstimator3D:
     def __init__(self,
                  min_detection_confidence=0.5,
                  min_tracking_confidence=0.5,
-                 roi_padding=40,
+                 roi_padding=80,
                  roi_ratio=0.8):
         """
         MediaPipe 3D 포즈 추정기 초기화 (동적 ROI 지원)

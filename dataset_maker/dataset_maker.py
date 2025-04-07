@@ -13,14 +13,19 @@ from kalman_filter import KeypointPreprosess
 from com_calculator import COMCalculator
 
 class DatasetCreater:
-    def __init__(self, roi_ratio=0.8, video_path=None, cut_file=None):
-        self.pose_estimator = PoseEstimator3D(roi_ratio=roi_ratio)
+    def __init__(self, roi_ratio=0.8, roi_padding=80, video_path=None, cut_file=None):
+        self.pose_estimator = PoseEstimator3D(roi_ratio=roi_ratio, roi_padding=roi_padding)
         self.kalman_tracker = KalmanFilterTracker3D()
         self.com_calculator = COMCalculator()
         self.keypoint_preprosessing = KeypointPreprosess(True)
         
         self.video_path = video_path
         self.cut_file = cut_file
+        
+        # 안정화를 위한 변수
+        self.stable_com_pos = None
+        self.max_allowed_move = 30.0  # 한 프레임당 최대 허용 이동 거리
+        self.smoothing_alpha = 0.7    # 지수 이동 평균 알파 값
 
     def read_cut_file(self, cut_file):
         """
@@ -34,6 +39,47 @@ class DatasetCreater:
                     frame_count, label = parts
                     cuts.append((int(frame_count.strip()), label.strip()))
         return cuts
+    
+    def _calculate_com(self, filtered_keypoints_3d):
+        """
+        무게중심 계산 및 안정화
+        Args:
+            filtered_keypoints_3d: 필터링된 3D 키포인트
+        Returns:
+            tuple: 안정화된 CoM 위치 (x, y, z)
+        """
+        # 3D CoM 계산
+        com_3d = self.com_calculator.calculate_whole_body_com(filtered_keypoints_3d, include_z=True)
+        if not com_3d:
+            return None
+
+        # CoM 필터링 - 반응성 개선
+        if self.stable_com_pos is None:
+            # 첫 프레임은 그대로 사용
+            self.stable_com_pos = com_3d
+        else:
+            # 이전 CoM 위치와 현재 위치 사이의 거리 계산
+            prev_com = np.array(self.stable_com_pos)
+            current_com = np.array(com_3d)
+            distance = np.linalg.norm(current_com - prev_com)
+
+            # 속도에 따른 적응형 알파값 (더 빠른 움직임에는 더 높은 알파값)
+            adaptive_alpha = min(0.9, self.smoothing_alpha + (distance / 100.0))
+
+            # 급격한 변화 필터링 (거리가 큰 경우 부드럽게 보간)
+            if distance > self.max_allowed_move:
+                # 최대 거리로 제한된 새 위치 계산
+                direction = (current_com - prev_com) / distance
+                limited_pos = prev_com + direction * self.max_allowed_move
+                com_3d = tuple(limited_pos)
+            else:
+                # 지수 이동 평균 적용
+                smoothed_com = prev_com * (1 - adaptive_alpha) + current_com * adaptive_alpha
+                com_3d = tuple(smoothed_com)
+
+            self.stable_com_pos = com_3d
+
+        return com_3d
         
     def process_frame(self, frame):
         """
@@ -54,7 +100,7 @@ class DatasetCreater:
                 filtered_keypoints_3d = self.kalman_tracker.track(keypoints_3d)
                 
                 # 3D CoM 계산
-                com_3d = self.com_calculator.calculate_whole_body_com(filtered_keypoints_3d, include_z=True)
+                com_3d = self._calculate_com(filtered_keypoints_3d)
                 
                 keypoints_and_com = filtered_keypoints_3d[11:] 
                 keypoints_and_com.append(com_3d)

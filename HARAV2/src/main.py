@@ -32,7 +32,7 @@ else:
 
 net = Deep_LSTM()
 net.to(device)
-net.load_state_dict(torch.load('/workspace/testbed/HARA/train/model_data4_2_l_00.pth'))
+net.load_state_dict(torch.load('../checkpoints/model_data4_2_l_00.pth'))
 net.eval()
 
 class InferenceVideo:

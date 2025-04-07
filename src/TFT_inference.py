@@ -321,6 +321,23 @@ class PedestrianBehaviorPredictor:
                     self.binary_mode = False
                     self.class_names = ['Standing', 'Start Walking', 'Walking', 'Finish Walking']
 
+                # 모델 테스트 예측 수행 (정상 작동 확인)
+                print("모델 테스트 예측 실행 중...")
+                try:
+                    dummy_input = {
+                        'x_cat': torch.zeros((1, 1, 1), dtype=torch.long, device=self.device),
+                        'x_real': torch.zeros((1, self.max_encoder_length, 70), dtype=torch.float32, device=self.device),
+                        'target': torch.zeros((1, 1, 1), dtype=torch.float32, device=self.device),
+                    }
+
+                    with torch.no_grad():
+                        self.model.eval()
+                        _ = self.model(dummy_input)
+                    print("모델 테스트 예측 성공!")
+                except Exception as e:
+                    print(f"모델 테스트 예측 실패: {e}")
+                    traceback.print_exc()
+
             except Exception as e:
                 print(f"모델 출력 크기 확인 중 오류 발생: {e}")
                 # 오류가 발생한 경우 바이너리 모드에 따라 기본값 사용
@@ -607,7 +624,7 @@ class PedestrianBehaviorPredictor:
                     else:
                         return 0, "Standing", [0.6, 0.2, 0.1, 0.1]
 
-                # 모델 예측 준비 - MPS 장치 사용
+                # 모델 예측 준비 - 현재 장치 사용
                 try:
                     # 3. 모델 추론 시간 측정
                     inference_start = time.time()
@@ -659,36 +676,48 @@ class PedestrianBehaviorPredictor:
                     if hasattr(outputs, '__dir__'):
                         self.debug_log(f"출력 속성: {dir(outputs)[:10]}")
 
-                    # 확률 추출
+                    # 테스트 데이터셋 평가 코드에서 사용한 방식으로 확률 추출
                     if hasattr(outputs, 'prediction'):
-                        # probabilities = torch.softmax(outputs.prediction, dim=-1)
-                        # 출력 처리 - 이진 분류/다중 분류에 따른 확률 계산 방식 차이
+                        # 예측값 처리
+                        predictions = outputs.prediction
+
+                        # 예측값 처리 - 이진 분류/다중 분류에 따른 확률 계산 방식 차이
                         if self.binary_mode:
-                            # 이진 분류의 경우 - 출력이 2차원이면 argmax, 1차원이면 sigmoid
-                            if outputs.prediction.size(-1) == 2:
+                            # 이진 분류의 경우 - 출력 크기 확인
+                            if predictions.size(-1) == 2:
                                 # 두 클래스에 대한 로짓이 있는 경우 (Softmax로 확률 변환)
-                                probabilities = torch.softmax(outputs.prediction, dim=-1)
+                                probabilities = torch.softmax(predictions, dim=-1)
+                                predicted_class = torch.argmax(probabilities, dim=-1)
                             else:
-                                # 단일 로짓인 경우 (Sigmoid로 확률 변환 후 [1-p, p] 형식으로 변환)
-                                prob = torch.sigmoid(outputs.prediction)
+                                # 단일 로짓인 경우 (Sigmoid로 확률 변환)
+                                prob = torch.sigmoid(predictions)
+                                predicted_class = (prob > 0.5).long()
+                                # [1-p, p] 형식으로 변환
                                 probabilities = torch.cat([1-prob, prob], dim=-1)
                         else:
                             # 다중 클래스의 경우 항상 softmax 사용
-                            probabilities = torch.softmax(outputs.prediction, dim=-1)
+                            probabilities = torch.softmax(predictions, dim=-1)
+                            predicted_class = torch.argmax(probabilities, dim=-1)
+
                         self.debug_log(f"확률 텐서 크기: {probabilities.shape}")
 
                         # 마지막 타임스텝의 예측 추출
                         if probabilities.dim() >= 3:
                             probabilities = probabilities[0, -1, :]
+                            predicted_class = predicted_class[0, -1]
                         else:
                             self.debug_log(f"예상치 못한 확률 차원: {probabilities.shape}")
                             probabilities = probabilities.squeeze()
+                            predicted_class = predicted_class.squeeze()
 
-                        # 확률 numpy 배열로 변환
+                        # 확률과 예측 클래스를 numpy 배열로 변환
                         probabilities = probabilities.cpu().numpy()
+                        predicted_class = predicted_class.cpu().numpy()
 
-                        # 가장 높은 확률을 가진 클래스 선택
-                        predicted_class = np.argmax(probabilities)
+                        # 스칼라로 변환
+                        if isinstance(predicted_class, np.ndarray):
+                            predicted_class = predicted_class.item()
+
                         predicted_class_name = self.class_names[predicted_class]
 
                         postproc_end = time.time()
@@ -868,7 +897,7 @@ class TFTInferenceSystem:
             csv_export: CSV 파일로 키포인트 데이터 내보내기 여부
             csv_filename: 내보낼 CSV 파일 이름
         """
-        self.tft_keypoint_processor = KeypointPreprocess(norm_type='minmax')  # 정규화 모드 활성화
+        self.tft_keypoint_processor = KeypointPreprocess(True)  # 정규화 모드 활성화
         self.binary_mode = binary_mode  # binary_mode 속성 추가
 
         # TFT 예측기 초기화
@@ -1005,7 +1034,7 @@ class TFTInferenceSystem:
                 prediction_status = "collecting"
                 predicted_class_name = f"Collecting data... ({len(self.behavior_predictor.frame_buffer)}/{self.behavior_predictor.max_encoder_length})"
                 # 바이너리 모드에 따라 확률 조정
-                if hasattr(self, 'binary_mode') and self.binary_mode:
+                if hasattr(self.behavior_predictor, 'binary_mode') and self.behavior_predictor.binary_mode:
                     probabilities = [0.5, 0.5]
                 else:
                     probabilities = [0.25, 0.25, 0.25, 0.25]
@@ -1027,8 +1056,37 @@ class TFTInferenceSystem:
                         num_classes = len(probabilities)  # 확률 배열 길이로 클래스 수 결정
                         class_counts = np.bincount(list(self.prediction_buffer), minlength=num_classes)
                         smoothed_class = np.argmax(class_counts)
+
+                        # 단순 다수결보다 더 안정적인 방식으로 스무딩 적용
+                        # 최근 프레임의 예측에 더 높은 가중치 부여
+                        weighted_counts = np.zeros(num_classes)
+                        buffer_list = list(self.prediction_buffer)
+                        for i, pred_class in enumerate(buffer_list):
+                            # 최근 예측에 더 높은 가중치 부여 (선형 증가)
+                            weight = (i + 1) / len(buffer_list)
+                            weighted_counts[pred_class] += weight
+
+                        smoothed_class = np.argmax(weighted_counts)
                         predicted_class = smoothed_class
                         predicted_class_name = self.behavior_predictor.class_names[smoothed_class]
+
+                        # 확률 조정 (원본 확률과 스무딩된 클래스 간 균형)
+                        if np.argmax(probabilities) != smoothed_class:
+                            # 원래 확률 저장
+                            original_probs = np.array(probabilities).copy()
+
+                            # 스무딩된 클래스에 가중치 부여하여 확률 조정
+                            alpha = 0.3  # 스무딩 정도
+                            adjusted_probs = original_probs.copy()
+                            max_idx = np.argmax(original_probs)
+
+                            # 최대 확률값을 감소시키고 스무딩된 클래스의 확률값 증가
+                            adjusted_probs[max_idx] -= alpha * original_probs[max_idx]
+                            adjusted_probs[smoothed_class] += alpha * original_probs[max_idx]
+
+                            # 확률의 합이 1이 되도록 정규화
+                            adjusted_probs = adjusted_probs / np.sum(adjusted_probs)
+                            probabilities = adjusted_probs.tolist()
 
             # CSV에 예측 결과 추가
             if self.csv_export:
@@ -1037,7 +1095,7 @@ class TFTInferenceSystem:
                 csv_data['predicted_class_name'] = predicted_class_name
 
                 # 확률 저장
-                if self.binary_mode:
+                if hasattr(self.behavior_predictor, 'binary_mode') and self.behavior_predictor.binary_mode:
                     csv_data['prob_standing'] = probabilities[0]
                     csv_data['prob_walking'] = probabilities[1]
                 else:

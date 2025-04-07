@@ -659,9 +659,22 @@ class PedestrianBehaviorPredictor:
                     if hasattr(outputs, '__dir__'):
                         self.debug_log(f"출력 속성: {dir(outputs)[:10]}")
 
-                    # 확률 추출 (softmax 적용)
+                    # 확률 추출
                     if hasattr(outputs, 'prediction'):
-                        probabilities = torch.softmax(outputs.prediction, dim=-1)
+                        # probabilities = torch.softmax(outputs.prediction, dim=-1)
+                        # 출력 처리 - 이진 분류/다중 분류에 따른 확률 계산 방식 차이
+                        if self.binary_mode:
+                            # 이진 분류의 경우 - 출력이 2차원이면 argmax, 1차원이면 sigmoid
+                            if outputs.prediction.size(-1) == 2:
+                                # 두 클래스에 대한 로짓이 있는 경우 (Softmax로 확률 변환)
+                                probabilities = torch.softmax(outputs.prediction, dim=-1)
+                            else:
+                                # 단일 로짓인 경우 (Sigmoid로 확률 변환 후 [1-p, p] 형식으로 변환)
+                                prob = torch.sigmoid(outputs.prediction)
+                                probabilities = torch.cat([1-prob, prob], dim=-1)
+                        else:
+                            # 다중 클래스의 경우 항상 softmax 사용
+                            probabilities = torch.softmax(outputs.prediction, dim=-1)
                         self.debug_log(f"확률 텐서 크기: {probabilities.shape}")
 
                         # 마지막 타임스텝의 예측 추출

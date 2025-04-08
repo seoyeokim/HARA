@@ -197,13 +197,19 @@ class KeypointPreprocess:
             preprosessed_keypoints = converted_keypoints
 
         return preprosessed_keypoints
+
+import numpy as np
+
 class TFTKeypointPreprocess:
     """
     TFT 모델 입력을 위한 키포인트 전처리 클래스
     - 정규화 및 상대 좌표 변환 수행
+    - 이상치 감지 및 보정 기능 추가
     """
     def __init__(self, normalization_type='z_score', reference_point='hip',
-                 scale_normalize=True, include_temporal=False, window_size=5):
+                 scale_normalize=True, include_temporal=False, window_size=5,
+                 per_axis_normalization=True, outlier_correction=True,
+                 outlier_threshold=5.0, correction_method='interpolate'):
         """
         키포인트 전처리 초기화
 
@@ -213,21 +219,47 @@ class TFTKeypointPreprocess:
             scale_normalize (bool): 척도 정규화 여부
             include_temporal (bool): 시간적 특성(속도, 가속도) 포함 여부
             window_size (int): 시간적 특성 계산을 위한 윈도우 크기
+            per_axis_normalization (bool): 축(x, y, z)별 독립 정규화 여부
+            outlier_correction (bool): 이상치 보정 여부
+            outlier_threshold (float): 이상치 탐지를 위한 표준편차 임계값
+            correction_method (str): 이상치 보정 방법 ('clip', 'median', 'interpolate')
         """
         self.normalization_type = normalization_type
         self.reference_point = reference_point
         self.scale_normalize = scale_normalize
         self.include_temporal = include_temporal
         self.window_size = window_size
+        self.per_axis_normalization = per_axis_normalization
+
+        # 이상치 보정 관련 설정
+        self.outlier_correction = outlier_correction
+        self.outlier_threshold = outlier_threshold
+        self.correction_method = correction_method
 
         # 이동 평균 필터를 위한 버퍼
         self.keypoints_buffer = []
 
+        # 이상치 보정을 위한 통계 추적
+        self.outlier_stats = {
+            'detected': 0,  # 감지된 이상치 수
+            'corrected': 0  # 보정된 이상치 수
+        }
+
         # 정규화를 위한 통계 정보
-        self.means = None
-        self.stds = None
-        self.mins = None
-        self.maxs = None
+        if per_axis_normalization:
+            # 축별 독립 정규화를 위한 통계
+            self.means = np.zeros(3)  # [x_mean, y_mean, z_mean]
+            self.stds = np.ones(3)    # [x_std, y_std, z_std]
+            self.mins = np.zeros(3)   # [x_min, y_min, z_min]
+            self.maxs = np.ones(3)    # [x_max, y_max, z_max]
+            self.stats_initialized = False
+        else:
+            # 기존 통합 정규화를 위한 통계
+            self.means = None
+            self.stds = None
+            self.mins = None
+            self.maxs = None
+            self.stats_initialized = False
 
     def process(self, keypoints_and_com):
         """
@@ -254,14 +286,18 @@ class TFTKeypointPreprocess:
         else:
             keypoints_normalized = keypoints_relative
 
-        # 3. 통계적 정규화 (Z-점수 또는 Min-Max)
+        # 3. 이상치 보정 (선택적)
+        if self.outlier_correction:
+            keypoints_normalized = self._correct_outliers(keypoints_normalized)
+
+        # 4. 통계적 정규화 (Z-점수 또는 Min-Max)
         processed_keypoints = self._apply_normalization(keypoints_normalized)
 
-        # 4. 시간적 특성 추출 (선택적)
+        # 5. 시간적 특성 추출 (선택적)
         if self.include_temporal and len(self.keypoints_buffer) >= self.window_size:
             processed_keypoints = self._extract_temporal_features(processed_keypoints)
 
-        # 5. 이동 평균 필터링을 위한 버퍼 업데이트
+        # 6. 이동 평균 필터링을 위한 버퍼 업데이트
         self._update_buffer(keypoints_normalized)
 
         # NumPy 배열을 리스트로 변환하여 반환
@@ -282,7 +318,6 @@ class TFTKeypointPreprocess:
                 com_relative = com - hip_center
 
                 # CoM도 키포인트와 동일하게 정규화 적용
-                # 별도 정규화 불필요 (스케일이 비슷함)
                 if self.scale_normalize:
                     # 키포인트와 동일한 척도 정규화 적용
                     reference_distance = self._get_reference_distance(keypoints_array)
@@ -290,6 +325,11 @@ class TFTKeypointPreprocess:
                 else:
                     com_normalized = com_relative
 
+                # 이상치 보정 적용 (CoM도 보정 대상에 포함)
+                if self.outlier_correction:
+                    com_normalized = self._correct_outliers(com_normalized.reshape(1, 3)).flatten()
+
+                # 단일 좌표를 (1, 3) 형태로 변환하여 정규화
                 com_processed = self._apply_normalization(com_normalized.reshape(1, 3)).flatten().tolist()
             except (IndexError, ValueError) as e:
                 print(f"Warning: Hip 키포인트 인덱스 오류 - {e}. CoM 좌표를 [0,0,0]으로 설정합니다.")
@@ -297,6 +337,85 @@ class TFTKeypointPreprocess:
 
         result.append(com_processed)
         return result
+
+    def _correct_outliers(self, keypoints):
+        """
+        이상치 감지 및 보정
+
+        Args:
+            keypoints (numpy.ndarray): 키포인트 좌표 배열
+
+        Returns:
+            numpy.ndarray: 이상치가 보정된 키포인트 배열
+        """
+        original_shape = keypoints.shape
+        corrected_keypoints = keypoints.copy()
+
+        # 축별로 이상치 보정 수행
+        for axis in range(3):  # x, y, z 축
+            axis_values = keypoints[..., axis].flatten()
+
+            # 축별 통계 계산
+            median = np.median(axis_values)
+            q1, q3 = np.percentile(axis_values, [25, 75])
+            iqr = q3 - q1
+
+            # IQR 방식으로 이상치 범위 정의
+            lower_bound = q1 - self.outlier_threshold * iqr
+            upper_bound = q3 + self.outlier_threshold * iqr
+
+            # Z-점수 방식으로 이상치 범위 정의 (대안)
+            mean = np.mean(axis_values)
+            std = np.std(axis_values)
+            z_lower_bound = mean - self.outlier_threshold * std
+            z_upper_bound = mean + self.outlier_threshold * std
+
+            # 최종 이상치 범위는 두 방식 중 더 넓은 범위를 선택
+            final_lower = min(lower_bound, z_lower_bound)
+            final_upper = max(upper_bound, z_upper_bound)
+
+            # 이상치 마스크 생성
+            outlier_mask = (keypoints[..., axis] < final_lower) | (keypoints[..., axis] > final_upper)
+            outlier_count = np.sum(outlier_mask)
+            self.outlier_stats['detected'] += outlier_count
+
+            if outlier_count > 0:
+                if self.correction_method == 'clip':
+                    # 방법 1: 임계값으로 클리핑
+                    corrected_keypoints[..., axis] = np.clip(
+                        corrected_keypoints[..., axis],
+                        final_lower,
+                        final_upper
+                    )
+
+                elif self.correction_method == 'median':
+                    # 방법 2: 중앙값으로 대체
+                    corrected_keypoints[outlier_mask, axis] = median
+
+                elif self.correction_method == 'interpolate' and len(self.keypoints_buffer) > 0:
+                    # 방법 3: 이전 프레임 값으로 보간 (시간적 보간)
+                    # 참고: 이 방법은 키포인트 버퍼에 이전 프레임이 있을 때만 사용 가능
+                    for idx in np.where(outlier_mask.flatten())[0]:
+                        # 인덱스를 다차원 인덱스로 변환
+                        multi_idx = np.unravel_index(idx, keypoints[..., axis].shape)
+
+                        # 이전 프레임들의 해당 키포인트 값 추출
+                        prev_values = [
+                            buf[multi_idx][axis] for buf in self.keypoints_buffer[-3:]
+                            if len(buf) > multi_idx[0]
+                        ]
+
+                        if prev_values:
+                            # 이전 값들의 평균으로 대체
+                            corrected_keypoints[multi_idx][axis] = np.mean(prev_values)
+                        else:
+                            # 이전 값이 없으면 중앙값으로 대체
+                            corrected_keypoints[multi_idx][axis] = median
+
+                self.outlier_stats['corrected'] += outlier_count
+                print(f"축 {axis}에서 {outlier_count}개의 이상치 감지 및 보정 (범위: {final_lower:.4f} ~ {final_upper:.4f})")
+
+        return corrected_keypoints
 
     def _convert_to_relative_coords(self, keypoints, reference):
         """
@@ -344,6 +463,12 @@ class TFTKeypointPreprocess:
 
             # hip 너비 계산
             hip_width = np.linalg.norm(keypoints[left_hip_index] - keypoints[right_hip_index])
+
+            # hip 너비가 너무 작은 경우(이상치) 대체값 사용
+            if hip_width < 1e-2:
+                print(f"Warning: Hip 너비({hip_width})가 너무 작습니다. 기본값 1.0을 사용합니다.")
+                return 1.0
+
             return hip_width if hip_width > 1e-6 else 1.0
         except IndexError:
             print("Warning: Hip 키포인트 인덱스를 찾을 수 없습니다. 기본값 1.0을 사용합니다.")
@@ -366,6 +491,8 @@ class TFTKeypointPreprocess:
         """
         통계적 정규화 적용 (Z-점수 또는 Min-Max)
 
+        축별 독립 정규화 또는 통합 정규화 선택적 적용
+
         Args:
             keypoints (numpy.ndarray): 키포인트 좌표 배열
 
@@ -375,40 +502,74 @@ class TFTKeypointPreprocess:
         if self.normalization_type == 'none':
             return keypoints
 
-        # 좌표 형태 재구성: (N, 3) -> (N*3,)
         original_shape = keypoints.shape
-        flattened = keypoints.reshape(-1)
 
-        if self.normalization_type == 'z_score':
-            if self.means is None or self.stds is None:
-                # 처음 호출 시 통계 계산
-                self.means = np.mean(flattened)
-                self.stds = np.std(flattened)
-                # 표준편차가 0이면 1로 설정 (0으로 나누기 방지)
-                if self.stds < 1e-6:
-                    self.stds = 1.0
+        if self.per_axis_normalization:
+            # 축별 독립 정규화 적용
+            normalized = np.zeros_like(keypoints)
 
-            # Z-점수 정규화 적용
-            normalized = (flattened - self.means) / self.stds
+            if not self.stats_initialized:
+                # 처음 호출 시 축별 통계 계산
+                for i in range(3):  # x, y, z 축
+                    axis_values = keypoints[..., i]
 
-        elif self.normalization_type == 'min_max':
-            if self.mins is None or self.maxs is None:
-                # 처음 호출 시 최소/최대값 계산
-                self.mins = np.min(flattened)
-                self.maxs = np.max(flattened)
-                # 최소값과 최대값이 같으면 나누기 방지
-                if np.abs(self.maxs - self.mins) < 1e-6:
-                    self.maxs = self.mins + 1.0
+                    if self.normalization_type == 'z_score':
+                        self.means[i] = np.mean(axis_values)
+                        self.stds[i] = np.std(axis_values)
+                        # 표준편차가 0이면 1로 설정 (0으로 나누기 방지)
+                        if self.stds[i] < 1e-6:
+                            self.stds[i] = 1.0
 
-            # Min-Max 정규화 적용
-            normalized = (flattened - self.mins) / (self.maxs - self.mins)
+                    elif self.normalization_type == 'min_max':
+                        self.mins[i] = np.min(axis_values)
+                        self.maxs[i] = np.max(axis_values)
+                        # 최소값과 최대값이 같으면 나누기 방지
+                        if np.abs(self.maxs[i] - self.mins[i]) < 1e-6:
+                            self.maxs[i] = self.mins[i] + 1.0
+
+                self.stats_initialized = True
+
+            # 축별로 정규화 적용
+            for i in range(3):  # x, y, z 축
+                if self.normalization_type == 'z_score':
+                    normalized[..., i] = (keypoints[..., i] - self.means[i]) / self.stds[i]
+                elif self.normalization_type == 'min_max':
+                    normalized[..., i] = (keypoints[..., i] - self.mins[i]) / (self.maxs[i] - self.mins[i])
+
+            return normalized
+
         else:
-            # 알 수 없는 정규화 유형
-            print(f"Warning: 알 수 없는 정규화 유형 '{self.normalization_type}'. 원본 데이터를 반환합니다.")
-            return keypoints
+            # 기존 통합 정규화 적용
+            flattened = keypoints.reshape(-1)
 
-        # 원래 형태로 복원
-        return normalized.reshape(original_shape)
+            if not self.stats_initialized:
+                if self.normalization_type == 'z_score':
+                    self.means = np.mean(flattened)
+                    self.stds = np.std(flattened)
+                    # 표준편차가 0이면 1로 설정 (0으로 나누기 방지)
+                    if self.stds < 1e-6:
+                        self.stds = 1.0
+
+                elif self.normalization_type == 'min_max':
+                    self.mins = np.min(flattened)
+                    self.maxs = np.max(flattened)
+                    # 최소값과 최대값이 같으면 나누기 방지
+                    if np.abs(self.maxs - self.mins) < 1e-6:
+                        self.maxs = self.mins + 1.0
+
+                self.stats_initialized = True
+
+            if self.normalization_type == 'z_score':
+                normalized = (flattened - self.means) / self.stds
+            elif self.normalization_type == 'min_max':
+                normalized = (flattened - self.mins) / (self.maxs - self.mins)
+            else:
+                # 알 수 없는 정규화 유형
+                print(f"Warning: 알 수 없는 정규화 유형 '{self.normalization_type}'. 원본 데이터를 반환합니다.")
+                return keypoints
+
+            # 원래 형태로 복원
+            return normalized.reshape(original_shape)
 
     def _extract_temporal_features(self, current_keypoints):
         """
@@ -466,7 +627,29 @@ class TFTKeypointPreprocess:
         전처리기 상태 리셋
         """
         self.keypoints_buffer = []
-        self.means = None
-        self.stds = None
-        self.mins = None
-        self.maxs = None
+        if self.per_axis_normalization:
+            self.means = np.zeros(3)
+            self.stds = np.ones(3)
+            self.mins = np.zeros(3)
+            self.maxs = np.ones(3)
+        else:
+            self.means = None
+            self.stds = None
+            self.mins = None
+            self.maxs = None
+        self.stats_initialized = False
+
+        # 이상치 통계 리셋
+        self.outlier_stats = {
+            'detected': 0,
+            'corrected': 0
+        }
+
+    def get_outlier_stats(self):
+        """
+        이상치 처리 통계 반환
+
+        Returns:
+            dict: 이상치 감지 및 보정 통계
+        """
+        return self.outlier_stats

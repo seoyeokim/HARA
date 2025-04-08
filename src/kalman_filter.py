@@ -197,267 +197,276 @@ class KeypointPreprocess:
             preprosessed_keypoints = converted_keypoints
 
         return preprosessed_keypoints
-
-'''
 class TFTKeypointPreprocess:
-    def __init__(self, norm_type = None):
-        self.scaler = MinMaxScaler()
-        self.norm_type = norm_type
-        # 디버깅 로그 활성화
-        self.debug_log_enabled = True
-
-    def _debug_log(self, message):
-        """디버깅 로그 출력 함수"""
-        if self.debug_log_enabled:
-            print(message)
-
-    def _points_normalization(self, keypoint_matrix):
+    """
+    TFT 모델 입력을 위한 키포인트 전처리 클래스
+    - 정규화 및 상대 좌표 변환 수행
+    """
+    def __init__(self, normalization_type='z_score', reference_point='hip',
+                 scale_normalize=True, include_temporal=False, window_size=5):
         """
-        키포인트 정규화 함수 - 오류 강화 처리 추가
+        키포인트 전처리 초기화
 
         Args:
-            keypoint_matrix: 정규화할 키포인트 행렬
+            normalization_type (str): 정규화 유형 ('z_score', 'min_max', 'none')
+            reference_point (str): 상대 좌표 변환 기준점 ('com', 'hip')
+            scale_normalize (bool): 척도 정규화 여부
+            include_temporal (bool): 시간적 특성(속도, 가속도) 포함 여부
+            window_size (int): 시간적 특성 계산을 위한 윈도우 크기
+        """
+        self.normalization_type = normalization_type
+        self.reference_point = reference_point
+        self.scale_normalize = scale_normalize
+        self.include_temporal = include_temporal
+        self.window_size = window_size
+
+        # 이동 평균 필터를 위한 버퍼
+        self.keypoints_buffer = []
+
+        # 정규화를 위한 통계 정보
+        self.means = None
+        self.stds = None
+        self.mins = None
+        self.maxs = None
+
+    def process(self, keypoints_and_com):
+        """
+        키포인트 및 CoM 전처리 수행
+
+        Args:
+            keypoints_and_com (list): 키포인트 및 CoM 좌표 리스트
+                                      [keypoint_11, keypoint_12, ..., com]
+                                      각 요소는 [x, y, z] 형태의 리스트
 
         Returns:
-            정규화된 키포인트 행렬
+            list: 전처리된 키포인트 및 CoM 좌표 리스트
         """
-        x_in_row, y_in_row, z_in_row, norm_matrix = [], [], [], []
+        # NumPy 배열로 변환
+        keypoints_array = np.array(keypoints_and_com[:-1])  # CoM 제외한 키포인트
+        com = np.array(keypoints_and_com[-1])               # CoM
 
-        try:
-            # 잘못된 데이터 유형 확인
-            if not isinstance(keypoint_matrix, np.ndarray):
-                self._debug_log(f"  경고: keypoint_matrix가 numpy 배열이 아닙니다. 변환 시도. 타입: {type(keypoint_matrix)}")
-                keypoint_matrix = np.array(keypoint_matrix)
+        # 1. 상대 좌표 변환
+        keypoints_relative = self._convert_to_relative_coords(keypoints_array, com)
 
-            # 빈 행렬 검사
-            if keypoint_matrix.size == 0:
-                self._debug_log("  오류: 빈 keypoint_matrix")
-                return np.array([])
+        # 2. 척도 정규화 (선택적)
+        if self.scale_normalize:
+            keypoints_normalized = self._apply_scale_normalization(keypoints_relative)
+        else:
+            keypoints_normalized = keypoints_relative
 
-            # 각 행에서 x, y, z 좌표 추출
-            for row in keypoint_matrix:
-                if len(row) >= 3:
-                    x_in_row.append(row[0])
-                    y_in_row.append(row[1])
-                    z_in_row.append(row[2])
-                else:
-                    self._debug_log(f"  경고: 행 길이가 3보다 작음: {len(row)}")
-                    x_in_row.append(0.0)
-                    y_in_row.append(0.0)
-                    z_in_row.append(0.0)
+        # 3. 통계적 정규화 (Z-점수 또는 Min-Max)
+        processed_keypoints = self._apply_normalization(keypoints_normalized)
 
-            # 스케일링 전에 배열이 비어있는지 확인
-            if not x_in_row or not y_in_row or not z_in_row:
-                self._debug_log("  오류: 좌표 배열이 비어 있습니다")
-                return np.zeros((len(keypoint_matrix), 3))
+        # 4. 시간적 특성 추출 (선택적)
+        if self.include_temporal and len(self.keypoints_buffer) >= self.window_size:
+            processed_keypoints = self._extract_temporal_features(processed_keypoints)
 
-            # NaN 값 확인 및 제거
-            x_array = np.array(x_in_row).reshape(-1, 1)
-            y_array = np.array(y_in_row).reshape(-1, 1)
-            z_array = np.array(z_in_row).reshape(-1, 1)
+        # 5. 이동 평균 필터링을 위한 버퍼 업데이트
+        self._update_buffer(keypoints_normalized)
 
-            # NaN 값 확인
-            if np.isnan(x_array).any() or np.isnan(y_array).any() or np.isnan(z_array).any():
-                self._debug_log("  경고: NaN 값 감지, 0으로 대체")
-                x_array = np.nan_to_num(x_array)
-                y_array = np.nan_to_num(y_array)
-                z_array = np.nan_to_num(z_array)
+        # NumPy 배열을 리스트로 변환하여 반환
+        result = processed_keypoints.tolist()
 
-            # 무한값 확인
-            if np.isinf(x_array).any() or np.isinf(y_array).any() or np.isinf(z_array).any():
-                self._debug_log("  경고: 무한값 감지, 0으로 대체")
-                x_array = np.nan_to_num(x_array, nan=0.0, posinf=0.0, neginf=0.0)
-                y_array = np.nan_to_num(y_array, nan=0.0, posinf=0.0, neginf=0.0)
-                z_array = np.nan_to_num(z_array, nan=0.0, posinf=0.0, neginf=0.0)
+        # CoM 좌표 처리
+        if self.reference_point == 'com':
+            # CoM 기준이면 CoM은 항상 [0,0,0]
+            com_processed = np.zeros(3).tolist()
+        else:
+            # Hip 기준인 경우 CoM의 상대 좌표 계산
+            # MediaPipe에서 hip은 23, 24번(인덱스 12, 13)
+            left_hip_index = 12  # 23번 키포인트 (11번 이후 기준)
+            right_hip_index = 13  # 24번 키포인트 (11번 이후 기준)
 
-            # 스케일링 적용
             try:
-                norm_x = self.scaler.fit_transform(x_array).flatten() * 0.25
-                norm_y = self.scaler.fit_transform(y_array).flatten()
-                norm_z = self.scaler.fit_transform(z_array).flatten() * 0.15
-            except Exception as e:
-                self._debug_log(f"  스케일링 오류: {e}")
-                # 오류 발생 시 단순 정규화 시도 (0~1)
-                x_min, x_max = np.min(x_array), np.max(x_array)
-                y_min, y_max = np.min(y_array), np.max(y_array)
-                z_min, z_max = np.min(z_array), np.max(z_array)
+                hip_center = (keypoints_array[left_hip_index] + keypoints_array[right_hip_index]) / 2
+                com_relative = com - hip_center
 
-                # min-max 정규화 직접 구현 (0 나누기 방지)
-                x_range = x_max - x_min
-                y_range = y_max - y_min
-                z_range = z_max - z_min
-
-                norm_x = ((x_array - x_min) / (x_range if x_range != 0 else 1)).flatten() * 0.25
-                norm_y = ((y_array - y_min) / (y_range if y_range != 0 else 1)).flatten()
-                norm_z = ((z_array - z_min) / (z_range if z_range != 0 else 1)).flatten() * 0.15
-
-            # 정규화된 좌표로 행렬 구성
-            for x, y, z in zip(norm_x, norm_y, norm_z):
-                norm_matrix.append([x, y, z])
-
-            return np.array(norm_matrix)
-
-        except Exception as e:
-            self._debug_log(f"  정규화 중 예외 발생: {e}")
-            # 오류 발생 시 원본 크기의 0 행렬 반환
-            return np.zeros((len(keypoint_matrix) if hasattr(keypoint_matrix, '__len__') else 0, 3))
-
-    def _coordinate_convert(self, keypoints):
-        """
-        좌표계 변환 함수 - 안전성 향상
-
-        Args:
-            keypoints: 변환할 키포인트 리스트
-
-        Returns:
-            변환된 키포인트 리스트
-        """
-        try:
-            converted_keypoints = []
-
-            # 키포인트 타입 확인 및 변환
-            if not isinstance(keypoints, np.ndarray):
-                self._debug_log(f"  키포인트가 numpy 배열이 아님, 변환 시도. 타입: {type(keypoints)}")
-                keypoints = np.array(keypoints)
-
-            # 빈 배열 검사
-            if keypoints.size == 0:
-                self._debug_log("  빈 keypoints 배열")
-                return []
-
-            # 키포인트 인덱스 유효성 검사
-            if len(keypoints) > 13:
-                # x 벡터에 대한 키포인트 (어깨 키포인트)
-                x1_idx, x2_idx = 13, 12
-                # y 벡터에 대한 키포인트 (눈 키포인트)
-                y1_idx, y2_idx = 1, 0
-            else:
-                # 인덱스 부족 시 사용 가능한 인덱스로 조정
-                self._debug_log(f"  키포인트 인덱스 부족, 조정 (개수: {len(keypoints)})")
-                x1_idx, x2_idx = min(3, len(keypoints) - 1), min(2, len(keypoints) - 1)
-                y1_idx, y2_idx = min(1, len(keypoints) - 1), min(0, len(keypoints) - 1)
-
-            # 인덱스 범위 벗어남 방지
-            if x1_idx >= len(keypoints) or x2_idx >= len(keypoints) or y1_idx >= len(keypoints) or y2_idx >= len(keypoints):
-                self._debug_log("  인덱스 범위 초과, 기본 좌표계 사용")
-                return [tuple(kp) for kp in keypoints]  # 변환 없이 반환
-
-            # 좌표계 변환을 위한 벡터 설정
-            x1, x2 = keypoints[x1_idx], keypoints[x2_idx]
-            y1, y2 = keypoints[y1_idx], keypoints[y2_idx]
-
-            # NaN 또는 무한값 확인
-            if (np.isnan(x1).any() or np.isnan(x2).any() or np.isnan(y1).any() or np.isnan(y2).any() or
-                np.isinf(x1).any() or np.isinf(x2).any() or np.isinf(y1).any() or np.isinf(y2).any()):
-                self._debug_log("  좌표에 NaN 또는 무한값 감지, 기본 좌표계 사용")
-                return [tuple(kp) for kp in keypoints]  # 변환 없이 반환
-
-            s_vector = (y1 - x1) + (y2 - x2)
-
-            # x 방향 벡터 (어깨선 방향)
-            x_vector = (x2 - x1)
-            x_norm = np.linalg.norm(x_vector)
-            if x_norm < 1e-10:  # 0으로 나누기 방지
-                self._debug_log("  x_vector 정규화 불가 (길이가 0에 가까움), 기본 좌표계 사용")
-                return [tuple(kp) for kp in keypoints]  # 변환 없이 반환
-            x_vector = x_vector / x_norm
-
-            # z 방향 벡터 (x와 s의 외적)
-            z_vector = np.cross(x_vector, s_vector)
-            z_norm = np.linalg.norm(z_vector)
-            if z_norm < 1e-10:  # 0으로 나누기 방지
-                self._debug_log("  z_vector 정규화 불가 (길이가 0에 가까움), 기본 좌표계 사용")
-                return [tuple(kp) for kp in keypoints]  # 변환 없이 반환
-            z_vector /= z_norm
-
-            # y 방향 벡터 (z와 x의 외적)
-            y_vector = np.cross(z_vector, x_vector)
-            y_norm = np.linalg.norm(y_vector)
-            if y_norm < 1e-10:  # 0으로 나누기 방지
-                self._debug_log("  y_vector 정규화 불가 (길이가 0에 가까움), 기본 좌표계 사용")
-                return [tuple(kp) for kp in keypoints]  # 변환 없이 반환
-            y_vector /= y_norm
-
-            # 회전 행렬 구성
-            rotation_matrix = np.column_stack((x_vector, y_vector, z_vector))
-            # 중간점 계산
-            middle_point = ((x1 + x2)/2) @ rotation_matrix
-
-            # 모든 키포인트 변환
-            for kp in keypoints:
-                # NaN 및 무한값 검사
-                if np.isnan(kp).any() or np.isinf(kp).any():
-                    self._debug_log(f"  키포인트에 NaN 또는 무한값 감지: {kp}")
-                    converted_keypoints.append((0.0, 0.0, 0.0))
+                # CoM도 키포인트와 동일하게 정규화 적용
+                # 별도 정규화 불필요 (스케일이 비슷함)
+                if self.scale_normalize:
+                    # 키포인트와 동일한 척도 정규화 적용
+                    reference_distance = self._get_reference_distance(keypoints_array)
+                    com_normalized = com_relative / (reference_distance if reference_distance > 1e-6 else 1.0)
                 else:
-                    try:
-                        converted_point = tuple((kp @ rotation_matrix) - middle_point)
-                        converted_keypoints.append(converted_point)
-                    except Exception as e:
-                        self._debug_log(f"  키포인트 변환 중 오류: {e}")
-                        converted_keypoints.append((0.0, 0.0, 0.0))
+                    com_normalized = com_relative
 
-            return converted_keypoints
+                com_processed = self._apply_normalization(com_normalized.reshape(1, 3)).flatten().tolist()
+            except (IndexError, ValueError) as e:
+                print(f"Warning: Hip 키포인트 인덱스 오류 - {e}. CoM 좌표를 [0,0,0]으로 설정합니다.")
+                com_processed = np.zeros(3).tolist()
 
-        except Exception as e:
-            self._debug_log(f"  좌표계 변환 중 예외 발생: {e}")
-            # 오류 발생 시 원본 좌표 반환 (튜플 변환)
-            return [tuple(kp) if hasattr(kp, '__iter__') else (0.0, 0.0, 0.0) for kp in keypoints]
+        result.append(com_processed)
+        return result
 
-    def process(self, keypoints):
+    def _convert_to_relative_coords(self, keypoints, reference):
         """
-        키포인트 처리 메인 함수
+        기준점(CoM 또는 Hip) 대비 상대 좌표로 변환
 
         Args:
-            keypoints: 처리할 키포인트 리스트
+            keypoints (numpy.ndarray): 키포인트 좌표 배열
+            reference (numpy.ndarray): 기준점 좌표 (CoM)
 
         Returns:
-            처리된 키포인트 리스트
+            numpy.ndarray: 상대 좌표로 변환된 키포인트 배열
+        """
+        if self.reference_point == 'com':
+            # CoM 기준 상대 좌표
+            return keypoints - reference
+        else:
+            # Hip 중심점 기준 상대 좌표
+            # MediaPipe Pose에서 hip은 23, 24번 키포인트 (11번부터 시작할 경우 인덱스 12, 13)
+            left_hip_index = 12  # 23번 키포인트 (11번 이후 기준)
+            right_hip_index = 13  # 24번 키포인트 (11번 이후 기준)
+
+            try:
+                hip_center = (keypoints[left_hip_index] + keypoints[right_hip_index]) / 2
+                return keypoints - hip_center
+            except IndexError:
+                print("Warning: Hip 키포인트 인덱스(12, 13)를 찾을 수 없습니다. 첫 두 개의 키포인트를 사용합니다.")
+                # 인덱스 오류 발생 시 대체 로직
+                hip_center = (keypoints[0] + keypoints[1]) / 2
+                return keypoints - hip_center
+
+    def _get_reference_distance(self, keypoints):
+        """
+        정규화를 위한 참조 거리 계산 (hip 너비)
+
+        Args:
+            keypoints (numpy.ndarray): 키포인트 좌표 배열
+
+        Returns:
+            float: 참조 거리 (hip 너비)
         """
         try:
-            # 입력 검사
-            if keypoints is None:
-                self._debug_log("process: keypoints가 None입니다")
-                return [(0.0, 0.0, 0.0)] * 23  # 기본값 반환 (23개 키포인트)
+            # MediaPipe에서 hip은 23, 24번 키포인트 (11번부터 시작할 경우 인덱스 12, 13)
+            left_hip_index = 12
+            right_hip_index = 13
 
-            if not hasattr(keypoints, '__len__'):
-                self._debug_log(f"process: keypoints가 시퀀스가 아닙니다. 타입: {type(keypoints)}")
-                return [(0.0, 0.0, 0.0)] * 23  # 기본값 반환
+            # hip 너비 계산
+            hip_width = np.linalg.norm(keypoints[left_hip_index] - keypoints[right_hip_index])
+            return hip_width if hip_width > 1e-6 else 1.0
+        except IndexError:
+            print("Warning: Hip 키포인트 인덱스를 찾을 수 없습니다. 기본값 1.0을 사용합니다.")
+            return 1.0
 
-            if len(keypoints) == 0:
-                self._debug_log("process: keypoints가 비어 있습니다")
-                return [(0.0, 0.0, 0.0)] * 23  # 기본값 반환
+    def _apply_scale_normalization(self, keypoints):
+        """
+        인체 크기에 대한 정규화 적용
 
-            # 키포인트의 10%만 기록 (로그 크기 감소)
-            if self.debug_log_enabled and np.random.random() < 0.1:
-                self._debug_log(f"process: 키포인트 길이: {len(keypoints)}")
-                if len(keypoints) > 0:
-                    self._debug_log(f"process: 첫 번째 키포인트 타입: {type(keypoints[0])}")
-                    self._debug_log(f"process: 첫 번째 키포인트 값: {keypoints[0]}")
+        Args:
+            keypoints (numpy.ndarray): 키포인트 좌표 배열
 
-            # 좌표계 변환
-            converted_keypoints = self._coordinate_convert(keypoints)
+        Returns:
+            numpy.ndarray: 크기 정규화된 키포인트 배열
+        """
+        reference_distance = self._get_reference_distance(keypoints)
+        return keypoints / reference_distance
 
-            # 변환 결과 검사
-            if not converted_keypoints or len(converted_keypoints) == 0:
-                self._debug_log("process: 변환된 키포인트가 비어 있습니다")
-                return [(0.0, 0.0, 0.0)] * 23  # 기본값 반환
+    def _apply_normalization(self, keypoints):
+        """
+        통계적 정규화 적용 (Z-점수 또는 Min-Max)
 
-            # 정규화 적용 (선택적)
-            if self.norm_type is not None:
-                preprocessed_keypoints = [tuple(kp) for kp in self._points_normalization(np.array(converted_keypoints))]
-            else:
-                preprocessed_keypoints = converted_keypoints
+        Args:
+            keypoints (numpy.ndarray): 키포인트 좌표 배열
 
-            # 결과 검사
-            if not preprocessed_keypoints or len(preprocessed_keypoints) == 0:
-                self._debug_log("process: 전처리된 키포인트가 비어 있습니다")
-                return [(0.0, 0.0, 0.0)] * 23  # 기본값 반환
+        Returns:
+            numpy.ndarray: 정규화된 키포인트 배열
+        """
+        if self.normalization_type == 'none':
+            return keypoints
 
-            return preprocessed_keypoints
+        # 좌표 형태 재구성: (N, 3) -> (N*3,)
+        original_shape = keypoints.shape
+        flattened = keypoints.reshape(-1)
 
-        except Exception as e:
-            self._debug_log(f"process: 키포인트 처리 중 예외 발생: {e}")
-            traceback.print_exc()
-            return [(0.0, 0.0, 0.0)] * 23  # 오류 발생 시 기본값 반환
-'''
+        if self.normalization_type == 'z_score':
+            if self.means is None or self.stds is None:
+                # 처음 호출 시 통계 계산
+                self.means = np.mean(flattened)
+                self.stds = np.std(flattened)
+                # 표준편차가 0이면 1로 설정 (0으로 나누기 방지)
+                if self.stds < 1e-6:
+                    self.stds = 1.0
+
+            # Z-점수 정규화 적용
+            normalized = (flattened - self.means) / self.stds
+
+        elif self.normalization_type == 'min_max':
+            if self.mins is None or self.maxs is None:
+                # 처음 호출 시 최소/최대값 계산
+                self.mins = np.min(flattened)
+                self.maxs = np.max(flattened)
+                # 최소값과 최대값이 같으면 나누기 방지
+                if np.abs(self.maxs - self.mins) < 1e-6:
+                    self.maxs = self.mins + 1.0
+
+            # Min-Max 정규화 적용
+            normalized = (flattened - self.mins) / (self.maxs - self.mins)
+        else:
+            # 알 수 없는 정규화 유형
+            print(f"Warning: 알 수 없는 정규화 유형 '{self.normalization_type}'. 원본 데이터를 반환합니다.")
+            return keypoints
+
+        # 원래 형태로 복원
+        return normalized.reshape(original_shape)
+
+    def _extract_temporal_features(self, current_keypoints):
+        """
+        시간적 특성(속도, 가속도) 추출
+
+        Args:
+            current_keypoints (numpy.ndarray): 현재 프레임의 키포인트
+
+        Returns:
+            numpy.ndarray: 시간적 특성이 추가된 키포인트
+        """
+        # 버퍼의 마지막 n개 프레임 사용
+        recent_frames = self.keypoints_buffer[-self.window_size:]
+        recent_frames.append(current_keypoints)
+        frames_array = np.array(recent_frames)
+
+        # 속도: 연속된 프레임 간 차이
+        velocities = np.diff(frames_array, axis=0)
+
+        # 가속도: 속도의 차이
+        accelerations = np.diff(velocities, axis=0)
+
+        # 현재 키포인트, 속도, 가속도 결합
+        # 각 키포인트에 대해 [x, y, z, vx, vy, vz, ax, ay, az] 형태로 확장
+        current_velocity = velocities[-1]
+        current_acceleration = accelerations[-1]
+
+        # 각 키포인트마다 위치, 속도, 가속도를 결합
+        result = []
+        for i in range(len(current_keypoints)):
+            keypoint_features = np.concatenate([
+                current_keypoints[i],
+                current_velocity[i],
+                current_acceleration[i]
+            ])
+            result.append(keypoint_features)
+
+        return np.array(result)
+
+    def _update_buffer(self, keypoints):
+        """
+        이동 평균 필터링을 위한 버퍼 업데이트
+
+        Args:
+            keypoints (numpy.ndarray): 현재 프레임의 키포인트
+        """
+        self.keypoints_buffer.append(keypoints)
+
+        # 버퍼 크기 제한
+        if len(self.keypoints_buffer) > self.window_size + 2:
+            self.keypoints_buffer.pop(0)
+
+    def reset(self):
+        """
+        전처리기 상태 리셋
+        """
+        self.keypoints_buffer = []
+        self.means = None
+        self.stds = None
+        self.mins = None
+        self.maxs = None

@@ -26,8 +26,10 @@ class PoseEstimator3D:
             min_tracking_confidence=min_tracking_confidence
         )
 
-        self.roi_bbox = None  # 현재 ROI 영역 [x_min, y_min, x_max, y_max]
-        self.roi_active = False # 현재 ROI를 사용 중인지 여부
+        self.default_roi_bbox = None # 기본 ROI 좌표 저장용
+        self.roi_bbox = None         # 현재(동적) ROI 좌표 저장용
+        self.roi_active = False      # 동적 ROI 활성 상태
+        self.initial_detection_done = False # 첫 탐지 성공 여부 플래그
         self.roi_padding = roi_padding # 픽셀 단위 패딩
         self.roi_ratio = roi_ratio # 기본 ROI 크기 비율
 
@@ -114,35 +116,48 @@ class PoseEstimator3D:
         height, width = frame.shape[:2]
         output_frame = frame.copy() # 결과용 프레임 복사
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        if self.default_roi_bbox is None:
+            self.default_roi_bbox = self._calculate_default_roi(width, height)
+            self.roi_bbox = self.default_roi_bbox
 
+        current_process_bbox = None
+        
+        if not self.initial_detection_done:
+            current_process_bbox = self.default_roi_bbox
+            process_in_roi = True # 기본 ROI 내에서 처리
+            # print("Using DEFAULT ROI (Initial)") # 디버깅용
+        elif self.roi_active and self.roi_bbox:
+            # 첫 탐지 성공했고, 동적 ROI가 활성화 상태면 동적 ROI 사용
+            current_process_bbox = self.roi_bbox
+            process_in_roi = True # 동적 ROI 내에서 처리
+            # print("Using DYNAMIC ROI") # 디버깅용
+        else:
+            # 첫 탐지는 성공했으나, 이전 프레임에서 실패하여 roi_active가 False인 경우
+            current_process_bbox = self.default_roi_bbox
+            self.roi_bbox = self.default_roi_bbox
+            process_in_roi = True # 기본 ROI 내에서 처리
+        
         # ROI용 이미지 초기 설정
         input_image = frame_rgb
         offset_x, offset_y = 0, 0
-        process_in_roi = False
-
-        if self.roi_active and self.roi_bbox:
-            x1, y1, x2, y2 = self.roi_bbox
+        
+        if process_in_roi and current_process_bbox:
+            x1, y1, x2, y2 = map(int, current_process_bbox)
             # 프레임 범위 내로 ROI 좌표 조정
             x1 = max(0, x1)
             y1 = max(0, y1)
             x2 = min(width, x2)
             y2 = min(height, y2)
 
-            if x1 < x2 and y1 < y2:
-                try:
-                    # ROI 영역 잘라내기
-                    input_image = frame_rgb[y1:y2, x1:x2].copy()
-                    offset_x, offset_y = x1, y1 # 원본 프레임 기준 오프셋 저장
-                    process_in_roi = True
-                except Exception as e:
-                     print(f"Error cropping ROI: {e}. Processing full frame instead.")
-                     input_image = frame_rgb # 에러 시 전체 프레임으로 복귀
-                     self.roi_active = False # ROI 비활성화
-                     self.roi_bbox = self._calculate_default_roi(width, height)
-            else:
-                self.roi_active = False
-                self.roi_bbox = self._calculate_default_roi(width, height)
-                input_image = frame_rgb # 전체 프레임 사용
+        if x1 < x2 and y1 < y2:
+            input_image = frame_rgb[y1:y2, x1:x2].copy()
+            offset_x, offset_y = x1, y1
+        else:
+            # 계산된 ROI가 유효하지 않은 경우
+            input_image = frame_rgb
+            process_in_roi = False
+            self.roi_active = False
 
         # MediaPipe 포즈 처리
         results = None
@@ -167,6 +182,8 @@ class PoseEstimator3D:
 
             # 랜드마크 좌표 보정
             for landmark in roi_landmarks.landmark:
+                if not self.initial_detection_done:
+                    self.initial_detection_done = True
                 # 1. ROI 내 픽셀 좌표 계산
                 pixel_x_roi = landmark.x * roi_w
                 pixel_y_roi = landmark.y * roi_h

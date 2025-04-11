@@ -582,10 +582,10 @@ def main():
     # 모델 체크포인트 경로 설정 (바이너리 모드에 따라 다른 기본 경로 사용)
     if args.tft and args.tft_checkpoint is None:
         if args.binary:
-            args.tft_checkpoint = '../../Model/TFT_2_class_best'
+            args.tft_checkpoint = '../checkpoints/TFT/2class'
             logger.info(f"바이너리 모드용 기본 체크포인트 설정: {args.tft_checkpoint}")
         else:
-            args.tft_checkpoint = '../../Model/TFT_best'
+            args.tft_checkpoint = '../checkpoints/TFT/4class'
             logger.info(f"4클래스 모드용 기본 체크포인트 설정: {args.tft_checkpoint}")
 
     # 추가 TFT 옵션 로깅

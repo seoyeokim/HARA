@@ -197,9 +197,6 @@ class KeypointPreprocess:
             preprosessed_keypoints = converted_keypoints
 
         return preprosessed_keypoints
-
-import numpy as np
-
 class TFTKeypointPreprocess:
     """
     TFT 모델 입력을 위한 키포인트 전처리 클래스

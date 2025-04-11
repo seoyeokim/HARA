@@ -57,7 +57,7 @@ class PoseTrackingSystem3D:
         self.z_direction_max_duration = 60  # 최대 표시 지속 프레임 수 (약 2초로 수정)
 
         # CNN 변수
-        self.model_path = "checkpoints\keypoint_classifier_CNN.tflite"
+        self.model_path = "checkpoints\CNN\keypoint_classifier_CNN.tflite"
         self.interpreter = tf.lite.Interpreter(model_path=self.model_path)
         self.interpreter.allocate_tensors()
         self.input_details = self.interpreter.get_input_details()

@@ -12,5 +12,8 @@
 ### LSTM 통합 모델
 - HARAV2 하위 경로
 
-### CNN/TFT 모델 및 Pose 모델
+### CNN/TFT 통합 모델 및 Pose 추정 모델
 - src 하위 경로
+
+### 모델 별 학습 코드
+- notebook 하위 경로

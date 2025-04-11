@@ -17,3 +17,6 @@
 
 ### 모델 별 학습 코드
 - notebook 하위 경로
+---
+### 발표자료
+https://docs.google.com/presentation/d/159_76kbwcaTabwIj1TIcruCfwZ6Fdnig/edit?slide=id.g34a35ef7495_0_4#slide=id.g34a35ef7495_0_4

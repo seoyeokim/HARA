@@ -57,7 +57,7 @@ class PoseTrackingSystem3D:
         self.z_direction_max_duration = 60  # 최대 표시 지속 프레임 수 (약 2초로 수정)
 
         # CNN 변수
-        self.model_path = "keypoint_classifier.tflite"
+        self.model_path = "checkpoints\keypoint_classifier_CNN.tflite"
         self.interpreter = tf.lite.Interpreter(model_path=self.model_path)
         self.interpreter.allocate_tensors()
         self.input_details = self.interpreter.get_input_details()
@@ -336,9 +336,11 @@ class PoseTrackingSystem3D:
     def _draw_prediction(self, frame, prediction):
         label_map = {
             0: "Standing",
-            1: "Start Walking",
+            # 1: "Start Walking",
+            1: "Standing",
             2: "Walking",
-            3: "Finish Walking"
+            # 3: "Finish Walking"
+            3: "Walking"
         }
 
         label = label_map.get(prediction, "Unknown")
@@ -346,24 +348,42 @@ class PoseTrackingSystem3D:
         # 색상: 클래스마다 구분
         color_map = {
             0: (255, 255, 0),    # 하늘
-            1: (0, 255, 255),    # 노랑
-            2: (0, 255, 0),      # 초록
-            3: (0, 128, 255)     # 주황
+            # 1: (0, 255, 255),    # 노랑
+            1: (255, 255, 0),    # 하늘
+            2: (0, 128, 255),      # 주황
+            # 3: (0, 255, 0)     # 초록
+            3: (0, 128, 255),      # 주황
         }
-        color = color_map.get(prediction, (255, 255, 255))
+        # 초기화
+        if not hasattr(self, "stable_prediction"):
+            self.stable_prediction = prediction
+            self.prev_prediction = prediction
+            self.prediction_count = 1
 
-        # 글꼴: 좀 더 부드러운 느낌으로 설정
-        font = cv2.FONT_HERSHEY_COMPLEX  # 혹은 FONT_HERSHEY_DUPLEX
+        # 현재 예측이 이전 예측과 같으면 카운트 증가
+        if prediction == self.prev_prediction:
+            self.prediction_count += 1
+        else:
+            self.prediction_count = 1  # 다시 카운트
+            self.prev_prediction = prediction
 
-        # 글자 크기와 굵기 조정
+        # 특정 횟수 이상 반복되면 안정된 예측으로 전환
+        threshold = 5  # 예: 같은 예측이 5프레임 이상 반복될 때만 바꿈
+        if self.prediction_count >= threshold:
+            self.stable_prediction = prediction
+
+        # 시각화용 값
+        label = label_map.get(self.stable_prediction, "Unknown")
+        color = color_map.get(self.stable_prediction, (255, 255, 255))
+
+        # 그림자 + 텍스트
+        font = cv2.FONT_HERSHEY_COMPLEX
         font_scale = 1.2
         thickness = 2
 
-        # 그림자 효과 추가: 검정색으로 먼저 한번 찍기
+        # 그림자 + 텍스트 시각화
         cv2.putText(frame, f"Action: {label}", (10, 50),
                     font, font_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
-
-        # 실제 글자
         cv2.putText(frame, f"Action: {label}", (10, 50),
                     font, font_scale, color, thickness, cv2.LINE_AA)
 

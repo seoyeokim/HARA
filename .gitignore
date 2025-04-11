@@ -172,3 +172,9 @@ cython_debug/
 
 # output video file
 *.mp4
+
+/debug
+
+src/inference_viz
+
+src/*.csv

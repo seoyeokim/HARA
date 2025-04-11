@@ -11,7 +11,7 @@ import time
 import csv
 
 from pose_estimator import PoseEstimator3D
-from kalman_filter import KalmanFilterTracker3D, KeypointPreprocess
+from kalman_filter import KalmanFilterTracker3D, TFTKeypointPreprocess
 from skeleton_visualizer import SkeletonVisualizer
 from com_calculator import COMCalculator
 from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
@@ -897,7 +897,7 @@ class TFTInferenceSystem:
             csv_export: CSV 파일로 키포인트 데이터 내보내기 여부
             csv_filename: 내보낼 CSV 파일 이름
         """
-        self.tft_keypoint_processor = KeypointPreprocess(True)  # 정규화 모드 활성화
+        self.tft_keypoint_processor = TFTKeypointPreprocess()
         self.binary_mode = binary_mode  # binary_mode 속성 추가
 
         # TFT 예측기 초기화

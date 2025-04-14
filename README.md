@@ -18,5 +18,6 @@
 ### 모델 별 학습 코드
 - notebook 하위 경로
 ---
-### 발표자료
-https://docs.google.com/presentation/d/159_76kbwcaTabwIj1TIcruCfwZ6Fdnig/edit?slide=id.g34a35ef7495_0_4#slide=id.g34a35ef7495_0_4
+### Poster
+![image](https://github.com/user-attachments/assets/5172e77f-4c5b-490d-b92c-97d98869e354)
+[아이펠톤_포스터_HARA.pdf](https://github.com/user-attachments/files/19729176/_._HARA.pdf)

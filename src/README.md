@@ -22,10 +22,10 @@
   - 카메라 사용: python main_3d.py 또는 python main_3d.py -i 0
   - 비디오 파일 처리: python main_3d.py -i path/to/video.mp4
 
- ### CNN 보행자 행동 추정
- - 2 class 분류
-   - 카메라 사용: python main_3d_CNN.py 또는 python main_3d_CNN.py -i 0
-   - 비디오 파일 처리: python main_3d_CNN.py -i path/to/video.mp4
+### CNN 보행자 행동 추정
+- 카메라 사용: python main_3d_CNN.py 또는 python main_3d_CNN.py -i 0
+- 비디오 파일 처리: python main_3d_CNN.py -i path/to/video.mp4
+- 2 class 분류 : python main_3d_CNN.py -b -i path/to/video.mp4 (-b 옵션을 지정하지 않을 경우, 4 class 분류)
 
 ### TFT 보행자 행동 추정
 - 4 class 분류 : python main_3d_TFT.py --tft -i path/to/video.mp4

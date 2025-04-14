@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class PoseTrackingSystem3D:
-    def __init__(self, roi_padding, roi_ratio):
+    def __init__(self, roi_padding, roi_ratio, isbinary=False):
         """
         3D 포즈 추적 시스템 초기화
         Args:
@@ -64,7 +64,8 @@ class PoseTrackingSystem3D:
         self.output_details = self.interpreter.get_output_details()
         self.class_names = ['Standing', 'Start Walking', 'Walking', 'Finish Walking']
         self.sequence = [] # 시퀀스 리스트 초기화
-        self.sequence_length = 20 # 시퀀스 길이 정의=
+        self.sequence_length = 20 # 시퀀스 길이 정의
+        self.isbinary = isbinary
 
 
     def _calculate_com(self, filtered_keypoints_3d):
@@ -323,6 +324,13 @@ class PoseTrackingSystem3D:
         return processed_frame
     
     def classify_action_with_tflite(self, sequence):
+        """
+        입력 데이터 기반 TFLite 모델 행동 분류
+        Args:
+            sequence (np.ndarray): (20, 69) 형태의 keypoint 시퀀스 데이터 (1개의 샘플)
+        Returns:
+            predicted_class (int): 예측된 클래스 인덱스
+        """
         import numpy as np
 
         input_data = np.array([self.sequence], dtype=np.float32)  # (1, 20, 69)
@@ -334,67 +342,81 @@ class PoseTrackingSystem3D:
         return predicted_class
     
     def _draw_prediction(self, frame, prediction):
-        label_map = {
-            0: "Standing",
-            # 1: "Start Walking",
-            1: "Standing",
-            2: "Walking",
-            # 3: "Finish Walking"
-            3: "Walking"
-        }
+        """
+        예측된 행동 클래스를 프레임 위에 시각화
+        Args:
+            frame (np.ndarray): 현재 비디오 프레임 (BGR 이미지)
+            prediction (int): 예측된 클래스 인덱스 (0~3 범위의 정수)
+        Returns:
+            frame (np.ndarray): 예측 결과가 오버레이된 프레임
+        """
+        # binary 여부에 따라 라벨/색상 매핑 다르게 설정
+        if self.isbinary:
+            visualization_map = {
+                0: "Standing",
+                1: "Walking"
+            }
+            color_map = {
+                "Standing": (255, 255, 0),  # 하늘
+                "Walking": (0, 128, 255)    # 주황
+            }
 
-        label = label_map.get(prediction, "Unknown")
+            # 4클래스 → 2클래스로 매핑
+            label_index = 0 if prediction in [0, 1] else 1
+        else:
+            visualization_map = {
+                0: "Standing",
+                1: "Start Walking",
+                2: "Walking",
+                3: "Finish Walking"
+            }
+            color_map = {
+                "Standing": (255, 255, 0),
+                "Start Walking": (0, 255, 255),
+                "Walking": (0, 128, 255),
+                "Finish Walking": (0, 255, 0)
+            }
 
-        # 색상: 클래스마다 구분
-        color_map = {
-            0: (255, 255, 0),    # 하늘
-            # 1: (0, 255, 255),    # 노랑
-            1: (255, 255, 0),    # 하늘
-            2: (0, 128, 255),      # 주황
-            # 3: (0, 255, 0)     # 초록
-            3: (0, 128, 255),      # 주황
-        }
-        # 초기화
+            label_index = prediction
+
+        # 5 프레임이상 prediction 유지 시 시각화)
         if not hasattr(self, "stable_prediction"):
-            self.stable_prediction = prediction
-            self.prev_prediction = prediction
+            self.stable_prediction = label_index
+            self.prev_prediction = label_index
             self.prediction_count = 1
 
-        # 현재 예측이 이전 예측과 같으면 카운트 증가
-        if prediction == self.prev_prediction:
+        if label_index == self.prev_prediction:
             self.prediction_count += 1
         else:
-            self.prediction_count = 1  # 다시 카운트
-            self.prev_prediction = prediction
+            self.prediction_count = 1
+            self.prev_prediction = label_index
 
-        # 특정 횟수 이상 반복되면 안정된 예측으로 전환
-        threshold = 5  # 예: 같은 예측이 5프레임 이상 반복될 때만 바꿈
-        if self.prediction_count >= threshold:
-            self.stable_prediction = prediction
+        if self.prediction_count >= 5:
+            self.stable_prediction = label_index
 
-        # 시각화용 값
-        label = label_map.get(self.stable_prediction, "Unknown")
-        color = color_map.get(self.stable_prediction, (255, 255, 255))
+        # 예측 결과로 label과 색상 결정
+        label = visualization_map.get(self.stable_prediction, "Unknown")
+        color = color_map.get(label, (255, 255, 255))
 
-        # 그림자 + 텍스트
+        # 텍스트 설정
         font = cv2.FONT_HERSHEY_COMPLEX
         font_scale = 1.2
         thickness = 2
+        text = f"Action: {label}"
 
-        # 그림자 + 텍스트 시각화
-        cv2.putText(frame, f"Action: {label}", (10, 50),
-                    font, font_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
-        cv2.putText(frame, f"Action: {label}", (10, 50),
-                    font, font_scale, color, thickness, cv2.LINE_AA)
+        # 그림자 텍스트 + 실제 텍스트
+        cv2.putText(frame, text, (10, 50), font, font_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+        cv2.putText(frame, text, (10, 50), font, font_scale, color, thickness, cv2.LINE_AA)
 
         return frame
 
 
     def run(self, input_source=0):
         """
-        비디오 캡처 및 처리
         Args:
-            input_source: 카메라 인덱스(정수) 또는 비디오 파일 경로(문자열)
+            frame (np.ndarray): 영상 프레임
+            prediction (int): 예측된 클래스 (0~3)
+            isbinary (bool): True이면 시각적으로 2개 클래스(Standing/Walking)로 단순화, False이면 4개 클래스 그대로 출력
         """
         cap = None
         output_video = None
@@ -564,6 +586,8 @@ def main():
                         help='ROI 여유 공간 (픽셀). 기본값: 80')
     parser.add_argument('-r', '--roi', type=float, default=0.95,
                         help='ROI 비율 (0.0~1.0). 기본값: 0.95')
+    parser.add_argument('-b', '--isbinary', action='store_true',
+                        help='2개 클래스 시각화 여부. 기본값: False (4클래스 모드)')
     args = parser.parse_args()
 
     # 입력 소스 처리
@@ -576,7 +600,7 @@ def main():
             sys.exit(1)
 
     # 시스템 초기화 및 실행
-    pose_tracking = PoseTrackingSystem3D(roi_padding=args.padding, roi_ratio=args.roi)
+    pose_tracking = PoseTrackingSystem3D(roi_padding=args.padding, roi_ratio=args.roi, isbinary=args.isbinary)
     pose_tracking.run(input_source)
 
 
